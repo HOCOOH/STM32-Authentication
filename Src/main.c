@@ -63,6 +63,7 @@
 #define N_WORKER 5
 */
 
+#define N_STATE 6
 #define STATE_INIT 0
 #define STATE_WAIT 1
 #define STATE_INPUT 2
@@ -96,6 +97,13 @@ uint8_t pass_buf[MAX_PASSWORD_LEN + 1] = {0};
 uint8_t pass_buf_sm3[DIGEST_LEN + 1] = {0};
 uint8_t pass_store[MAX_PASSWORD_LEN + 1] = {0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0, 0};
 uint8_t pass_store_sm3[DIGEST_LEN + 1] = {0};
+u8 prev_state_table[N_STATE][N_STATE] = {	
+									{0, 0, 0, 0, 0, 1}, 
+									{1, 0, 1, 1, 1, 0},
+									{0, 1, 0, 0, 0, 0},
+									{0, 0, 1, 0, 0, 0},
+									{0, 0, 1, 0, 0, 0},
+									{1, 1, 1, 1, 1, 0} }; // exception´ýÌí¼Ó
 uint8_t input_cursor = 0;
 /*
 uint8_t un_buf[MAX_USERNAME_LEN] = {0};
@@ -298,12 +306,16 @@ int main(void) {
 }
 
 u8 IsStateValid(u8 expectState) {
-    if (state.currentState != expectState) {
-        return 1;
-    }
-    // todo: check last state
+	if (state.currentState != expectState) {
+		return 1;
+	}
 
-    return 0;
+	// todo: check pre state
+	u8 check_pre_res = prev_state_table[state.currentState][state.lastState];
+	if (check_pre_res == 0)
+		return 1;
+
+	return 0;	
 }
 
 void UpdateState(u8 nextState) {
