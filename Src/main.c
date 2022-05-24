@@ -63,6 +63,7 @@
 #define N_WORKER 5
 */
 
+#define N_STATE 6
 #define STATE_INIT 0
 #define STATE_WAIT 1
 #define STATE_INPUT 2
@@ -96,6 +97,13 @@ uint8_t pass_buf[MAX_PASSWORD_LEN+1] = {0};
 uint8_t pass_buf_sm3[DIGEST_LEN+1] = {0};
 uint8_t pass_store[MAX_PASSWORD_LEN+1] = {0x1, 0x2, 0x3, 0x4, 0, 0, 0, 0};
 uint8_t pass_store_sm3[DIGEST_LEN+1] = {0};
+u8 prev_state_table[N_STATE][N_STATE] = {	
+									{0, 0, 0, 0, 0, 1}, 
+									{1, 0, 1, 1, 1, 0},
+									{0, 1, 0, 0, 0, 0},
+									{0, 0, 1, 0, 0, 0},
+									{0, 0, 1, 0, 0, 0},
+									{1, 1, 1, 1, 1, 0} }; // exception待添加
 uint8_t input_cursor = 0;
 /*
 uint8_t un_buf[MAX_USERNAME_LEN] = {0};
@@ -216,7 +224,7 @@ int main(void) {
 				// 修改密码模式
 				edit_mode = 1;
 			} else if (flag == 16 && input_cursor != 0) { // 非首字符按键为*
-				
+
 				// 异常!!!:无效的字符
 			} else {
 				pass_buf[input_cursor++] = flag;
@@ -281,9 +289,13 @@ u8 IsStateValid(u8 expectState) {
 	if (state.currentState != expectState) {
 		return 1;
 	}
-	// todo: check last state
 
-	return 0;
+	// todo: check pre state
+	u8 check_pre_res = prev_state_table[state.currentState][state.lastState];
+	if (check_pre_res == 0)
+		return 1;
+
+	return 0;	
 }
 
 void UpdateState(u8 nextState) {
