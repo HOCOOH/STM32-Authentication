@@ -63,12 +63,29 @@
 #define N_WORKER 5
 */
 
+#define STATE_INIT 0
+#define STATE_WAIT 1
+#define STATE_INPUT 2
+#define STATE_CHECK 3
+#define STATE_EDIT 4
+#define STATE_EXCEPTION 5
+
 #define MAX_PASSWORD_LEN 8
 #define MIN_PASSWORD_LEN 5
 #define DIGEST_LEN 32
 
+#define REFRESH_COUNT_INIT 500
+
+typedef struct {
+	u8 currentState;
+	u8 lastState;
+	u8 errerCode;
+} State;
+
+u32 refreshCount = 0;
+State state = {0, 0, 0};
 uint8_t flag;//不同的按键有不同的标志位值
-uint8_t flag1 = 0;//中断标志位，每次按键产生一次中断，并开始读取8个数码管的值
+uint8_t flagInterrupt = 0;//中断标志位，每次按键产生一次中断，并开始读取8个数码管的值
 uint8_t Rx2_Buffer[8]={0};
 uint8_t Tx1_Buffer[8]={0};
 uint8_t Rx1_Buffer[1]={0};
@@ -100,32 +117,83 @@ void disp_str(uint8_t* code);
 uint8_t cmp(uint8_t* arr1, uint8_t* arr2, uint8_t len);
 uint32_t len(uint8_t* arr);
 void disp_in_serial(uint8_t* arr);
+void UpdateState(u8 nextState);
+u8 IsStateValid(u8 expectState);
 
 int main(void) {
-
-  	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  	HAL_Init();
-
-  	/* Configure the system clock */
-  	SystemClock_Config();
-
-  	/* Initialize all configured peripherals */
-  	MX_GPIO_Init();
-  	MX_I2C1_Init();
-  	MX_USART1_UART_Init();
+	// printf("\n\r");
+	// printf("\n\r===================================\r\n");
+	// printf("\n\r FS-STM32身份验证系统\r\n");
+	// printf("\n test : len(pass_store):%d\n", len(pass_store));
+	// printf("\n test : pass_store:\n\r");
+	// disp_in_serial(pass_store);
 	
-	printf("\n\r");
-	printf("\n\r===================================\r\n");
-	printf("\n\r FS-STM32身份验证系统\r\n");
-	printf("\n\r fuck test! \r\n");
-	printf("\n test : len(pass_store):%d\n", len(pass_store));
-	printf("\n test : pass_store:\n\r");
-	disp_in_serial(pass_store);
-	
-	SM3_Hash(pass_store, len(pass_store), (void*)pass_store_sm3);
-	printf("SM3哈希后的pass_store:\n");
-	disp_in_serial(pass_store_sm3);
-	printf("\n");
+	// SM3_Hash(pass_store, len(pass_store), (void*)pass_store_sm3);
+	// printf("SM3哈希后的pass_store:\n");
+	// disp_in_serial(pass_store_sm3);
+	// printf("\n");
+
+	// 主循环
+	while (1) {
+		if (state.currentState == STATE_INIT) {	// 初始化
+			/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+			HAL_Init();
+
+			/* Configure the system clock */
+			SystemClock_Config();
+
+			/* Initialize all configured peripherals */
+			MX_GPIO_Init();
+			MX_I2C1_Init();
+			MX_USART1_UART_Init();
+
+			refreshCount = REFRESH_COUNT_INIT;
+
+			// switch to state wait
+			UpdateState(STATE_WAIT);
+		}
+		else if (state.currentState == STATE_WAIT) {	// 待机
+			if (!IsStateValid(STATE_WAIT)) {
+				UpdateState(STATE_EXCEPTION);
+				continue;
+			}
+			if (flagInterrupt == 1) {
+				UpdateState(STATE_INPUT);
+				continue;
+			}
+			// set refresh timer 
+			if (refreshCount-- == 0) {
+				UpdateState(STATE_INIT);
+				continue;
+			}
+		}
+		else if (state.currentState == STATE_INPUT) {	// 输入
+			if (!IsStateValid(STATE_INPUT)) {
+				UpdateState(STATE_EXCEPTION);
+				continue;
+			}
+
+		}
+		else if (state.currentState == STATE_CHECK) {	// 判断密码
+			if (!IsStateValid(STATE_CHECK)) {
+				UpdateState(STATE_EXCEPTION);
+				continue;
+			}
+
+		}
+		else if (state.currentState == STATE_EDIT) {	// 修改密码
+			if (!IsStateValid(STATE_EDIT)) {
+				UpdateState(STATE_EXCEPTION);
+				continue;
+			}
+		}
+		else {	// default 异常
+			UpdateState(STATE_INIT);
+		}
+	}
+
+
+
 
 	/* 给pass_store初始化 */
 
@@ -134,8 +202,8 @@ int main(void) {
 	// 接收密码输入
 	while (1) {
 
-		if(flag1 == 1 && input_cursor < MAX_PASSWORD_LEN) {
-			flag1 = 0;
+		if(flagInterrupt == 1 && input_cursor < MAX_PASSWORD_LEN) {
+			flagInterrupt = 0;
 			I2C_ZLG7290_Read(&hi2c1,0x71,0x01,Rx1_Buffer,1);//读键值
 			swtich_key();//扫描键值，写标志位
 			I2C_ZLG7290_Read(&hi2c1,0x71,0x10,Rx2_Buffer,8);//读8位数码管
@@ -207,6 +275,25 @@ int main(void) {
 		}
 		// 设置status_code
 	}
+}
+
+u8 IsStateValid(u8 expectState) {
+	if (state.currentState != expectState) {
+		return 1;
+	}
+	// todo: check last state
+
+	return 0;
+}
+
+void UpdateState(u8 nextState) {
+	// TODO: check if next state is vaild
+	state.lastState = state.currentState;
+	state.currentState = nextState;
+
+	// TODO: edit error code 
+
+	// todo: 备份state
 }
 
 void disp_str(uint8_t* code) {
@@ -528,7 +615,7 @@ void switch_flag(void){
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-	flag1 = 1;
+	flagInterrupt = 1;
 }
 int fputc(int ch, FILE *f)
 { 
