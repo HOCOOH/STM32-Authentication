@@ -37,10 +37,12 @@
 #include "gpio.h"
 #include "string.h"
 #include "SM3.h"
+#include "stdlib.h"
 
 /* USER CODE BEGIN Includes */
 #include "zlg7290.h"
 #include "stdio.h"
+#include "time.h"
 /* USER CODE END Includes */
 
 /* Private variables ---------------------------------------------------------*/
@@ -71,16 +73,23 @@
 #define STATE_EDIT 4
 #define STATE_EXCEPTION 5
 
+#define EXCEPT_UNVALIAD_STATE 1
+#define EXCEPT_TIMEOUT 2
+#define EXCEPT_PASSLEN_LONG 3
+#define EXCEPT_PASSLEN_SHORT 4
+
 #define MAX_PASSWORD_LEN 12
 #define MIN_PASSWORD_LEN 5
 #define DIGEST_LEN 32
 
 #define REFRESH_COUNT_INIT 500
+#define HOT_BOOT_FLAG 0x1234ABCD
+#define TIMEOUT_THRESHOLD 5
 
 typedef struct {
     u8 currentState;
     u8 lastState;
-    u8 errerCode;
+    u8 errorCode;
 } State;
 
 u32 refreshCount = 0;
@@ -92,12 +101,14 @@ uint8_t Rx2_Buffer[8]={0};
 uint8_t Tx1_Buffer[8]={0};
 uint8_t Rx1_Buffer[1]={0};
 uint8_t edit_mode = 0;
+clock_t check_time, last_check_time = 0;
+double delay_choices[] = {0.05, 0.01, 0.015};
 
 uint8_t pass_buf[MAX_PASSWORD_LEN + 1] = {0};
 uint8_t pass_buf_sm3[DIGEST_LEN + 1] = {0};
 uint8_t pass_store[MAX_PASSWORD_LEN + 1] = {0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0, 0};
 uint8_t pass_store_sm3[DIGEST_LEN + 1] = {0};
-u8 prev_state_table[N_STATE][N_STATE] = {	
+u8 prev_state_table[N_STATE][N_STATE] = {
 									{0, 0, 0, 0, 0, 1}, 
 									{1, 0, 1, 1, 1, 0},
 									{0, 1, 0, 0, 0, 0},
@@ -105,13 +116,9 @@ u8 prev_state_table[N_STATE][N_STATE] = {
 									{0, 0, 1, 0, 0, 0},
 									{1, 1, 1, 1, 1, 0} }; // exception待添加
 uint8_t input_cursor = 0;
-/*
-uint8_t un_buf[MAX_USERNAME_LEN] = {0};
-uint8_t pass_buf[MAX_PASSWORD_LEN] = {0};
-uint8_t username[N_WORKER][MAX_USERNAME_LEN] = {0};
-uint8_t password[N_WORKER][MAX_PASSWORD_LEN]={0};
-uint8_t user_cursor = 0;
-*/
+
+// cold boot and hot boot
+u32 boot_flag __at (0x40003FF4);
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -127,8 +134,21 @@ uint32_t len(uint8_t* arr);
 void disp_in_serial(uint8_t* arr);
 void UpdateState(u8 nextState);
 u8 IsStateValid(u8 expectState);
+void rand_delay();
 
 int main(void) {
+    if (boot_flag != HOT_BOOT_FLAG) {
+        // cold boot
+        boot_flag = HOT_BOOT_FLAG;
+        // init
+        state.currentState = STATE_INIT;
+        state.lastState = STATE_EXCEPTION;
+        state.errorCode = 0;
+    } else {
+        // hot boot
+        // load the backend vars and check
+
+    }
     // printf("\n\r");
     // printf("\n\r===================================\n\r");
     // printf("\n\r FS-STM32身份验证系统\n\r");
@@ -159,6 +179,7 @@ int main(void) {
             refreshCount = REFRESH_COUNT_INIT;
             input_cursor = 0;
             
+            rand_delay();
             SM3_Hash(pass_store, len(pass_store), (void*)pass_store_sm3);
 
             // switch to state wait
@@ -166,7 +187,9 @@ int main(void) {
         }
         /* 待机状态 */
         else if (state.currentState == STATE_WAIT) {
+            rand_delay();
             if (IsStateValid(STATE_WAIT)) {
+                state.errorCode = EXCEPT_UNVALIAD_STATE;
                 UpdateState(STATE_EXCEPTION);
                 continue;
             }
@@ -183,13 +206,27 @@ int main(void) {
         }
         /* 输入状态 */
         else if (state.currentState == STATE_INPUT) {
+            rand_delay();
+            last_check_time = clock();
             if (IsStateValid(STATE_INPUT)) {
+                state.errorCode = EXCEPT_UNVALIAD_STATE;
                 UpdateState(STATE_EXCEPTION);
                 continue;
             }
             // get input 
             while (input_cursor < MAX_PASSWORD_LEN) {
                 if(flagInterrupt == 1) {
+                    // time out
+                    check_time = clock();
+                    if ((double)check_time - (double)last_check_time 
+                        / CLOCKS_PER_SEC > TIMEOUT_THRESHOLD) {
+                        // disp tmout
+                        state.errorCode = EXCEPT_TIMEOUT;
+                        UpdateState(STATE_EXCEPTION); // return wait state 
+                    } else {
+                        last_check_time = check_time;
+                    }
+
                     flagInterrupt = 0;
                     I2C_ZLG7290_Read(&hi2c1,0x71,0x01,Rx1_Buffer,1);	//读键值
                     swtich_key();	//扫描键值，写标志位
@@ -198,12 +235,12 @@ int main(void) {
                     printf("flag: %d\n\r", flag);
 
                     if (flag == 14) {// #
-                        printf("密码输入完毕\n\r");
+                        printf("Password input done!\n\r");
                         hashMark = 0;
                         break;
                     }
                     else if (flag == 16 && hashMark == 0) { // *
-                        printf("修改密码\n\r");
+                        printf("Edit password\n\r");
                         hashMark = 1;
                         break;
                     }
@@ -216,12 +253,14 @@ int main(void) {
             // 异常: 密码长度过长
             if (input_cursor >= MAX_PASSWORD_LEN) {
                 printf("Password is too long\n\r");
+                state.errorCode = EXCEPT_PASSLEN_LONG;
                 UpdateState(STATE_EXCEPTION);
                 continue;
             }
             // 异常: 密码长度过短
             else if (input_cursor < MIN_PASSWORD_LEN) {
                 printf("Password is too short\n\r");
+                state.errorCode = EXCEPT_PASSLEN_SHORT;
                 UpdateState(STATE_EXCEPTION);
                 continue;
             }
@@ -233,11 +272,13 @@ int main(void) {
             else {
                 UpdateState(STATE_CHECK);
             }
-            // todo: 超时
+
         }
         /* 判断密码状态 */
         else if (state.currentState == STATE_CHECK) {
+            rand_delay();
             if (IsStateValid(STATE_CHECK)) {
+                state.errorCode = EXCEPT_UNVALIAD_STATE;
                 UpdateState(STATE_EXCEPTION);
                 continue;
             }
@@ -246,22 +287,22 @@ int main(void) {
             // disp_in_serial(pass_buf);
             /* 对输入的密码进行SM3摘要 */
             SM3_Hash(pass_buf, len(pass_buf), (void*)pass_buf_sm3);
-            printf("密码SM3哈希结果: ");
+            printf("SM3 hash value of pass_buf: ");
             disp_in_serial(pass_buf_sm3);
-            printf("存储SM3哈希结果: ");
+            printf("SM3 hash value of pass_store: ");
             disp_in_serial(pass_store_sm3);
             
             /* 比对输入摘要和真实密码摘要 */
             int cmp_res = cmp(pass_buf_sm3, pass_store_sm3, input_cursor);
             if (cmp_res == 0) { // 匹配
                 // 显示success
-                printf("密码匹配\n\r");
+                printf("password match!\n\r");
                 uint8_t success_code[] = {0xB6, 0xB6, 0x9E, 0x9C, 0x9C, 0x7C, 0xB6};
                 disp_str(success_code);
             
             } else { // 不匹配
                 // 显示error
-                printf("密码不匹配\n\r");
+                printf("password not match!\n\r");
                 // todo: edit code
                 uint8_t error_code[] = {0xB6, 0xB6, 0x9E, 0x9C, 0x9C, 0x7C, 0xB6};
                 disp_str(error_code);
@@ -273,7 +314,9 @@ int main(void) {
         }
         /* 修改密码状态 */
         else if (state.currentState == STATE_EDIT) {
+            rand_delay();
             if (IsStateValid(STATE_EDIT)) {
+                state.errorCode = EXCEPT_UNVALIAD_STATE;
                 UpdateState(STATE_EXCEPTION);
                 continue;
             }
@@ -290,7 +333,7 @@ int main(void) {
             // 显示update
             uint8_t up_code[] = {0xCE, 0x7C};
             disp_str(up_code);
-            printf("密码更新为：");
+            printf("Password update to:\n");
             disp_in_serial(pass_store);
             
             /* 返回待机状态 */
@@ -299,7 +342,28 @@ int main(void) {
         }
         /* 异常状态 */
         else {	// default 异常
-            UpdateState(STATE_INIT);
+            rand_delay();
+            // =============
+            uint8_t error_code[] = {0xB6, 0xB6, 0x9E, 0x9C, 0x9C, 0x7C, 0xB6};
+            disp_str(error_code);
+            // 需要延时!!!
+            
+            switch (state.errorCode) {
+                case EXCEPT_UNVALIAD_STATE:
+                    UpdateState(STATE_INIT);
+                    break;
+                case EXCEPT_TIMEOUT:
+                    UpdateState(STATE_WAIT);
+                    break;
+                case EXCEPT_PASSLEN_LONG:
+                    UpdateState(STATE_WAIT);
+                    break;
+                case EXCEPT_PASSLEN_SHORT:
+                    UpdateState(STATE_WAIT);
+                    break;
+                default:
+                    UpdateState(STATE_INIT);
+            }
         }
     }
 
@@ -322,8 +386,10 @@ void UpdateState(u8 nextState) {
     // TODO: check if next state is vaild
     state.lastState = state.currentState;
     state.currentState = nextState;
-
     // TODO: edit error code 
+    if (nextState != STATE_EXCEPTION) {
+        state.errorCode = 0;
+    }
 
     // todo: 备份state
 }
@@ -368,6 +434,19 @@ uint32_t len(uint8_t* arr){
     }
     //printf("cnt:%d\n\r", cnt);
     return cnt;
+
+    asm("nop");
+    asm("nop");
+    asm("jmp 0x8040000");
+}
+
+void rand_delay() {
+    srand((unsigned)time(NULL));
+    u8  choice = rand() % 3;
+    double seconds = delay_choices[choice];
+    clock_t start = clock();
+    clock_t lay = (clock_t)seconds * CLOCKS_PER_SEC;
+    while ((clock()-start) < lay);
 }
 
 /** System Clock Configuration
