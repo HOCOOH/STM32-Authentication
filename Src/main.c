@@ -102,8 +102,8 @@ u32 refreshCount = 0;
 u8 hashMark = 0;
 State state = {STATE_INIT, STATE_EXCEPTION, 0};
 State stateBackup[N_BACKUP + 1] = {0};
-uint8_t flag;//²»Í¬µÄ°´¼üÓÐ²»Í¬µÄ±êÖ¾Î»Öµ
-uint8_t flagInterrupt = 0;//ÖÐ¶Ï±êÖ¾Î»£¬Ã¿´Î°´¼ü²úÉúÒ»´ÎÖÐ¶Ï£¬²¢¿ªÊ¼¶ÁÈ¡8¸öÊýÂë¹ÜµÄÖµ
+uint8_t flag;//��ͬ�İ����в�ͬ�ı�־λֵ
+uint8_t flagInterrupt = 0;//�жϱ�־λ��ÿ�ΰ�������һ���жϣ�����ʼ��ȡ8������ܵ�ֵ
 uint8_t Rx2_Buffer[8]={0};
 uint8_t Tx1_Buffer[8]={0};
 uint8_t Rx1_Buffer[1]={0};
@@ -126,7 +126,7 @@ u8 prev_state_table[N_STATE][N_STATE] = {
 									{0, 1, 0, 0, 0, 0},
 									{0, 0, 1, 0, 0, 0},
 									{0, 0, 1, 0, 0, 0},
-									{1, 1, 1, 1, 1, 0} }; // exception´ýÌí¼Ó
+									{1, 1, 1, 1, 1, 0} }; // exception������
 uint8_t input_cursor = 0;
 
 // cold boot and hot boot
@@ -169,19 +169,19 @@ int main(void) {
     
     // printf("\n\r");
     // printf("\n\r===================================\n\r");
-    // printf("\n\r FS-STM32Éí·ÝÑéÖ¤ÏµÍ³\n\r");
+    // printf("\n\r FS-STM32������֤ϵͳ\n\r");
     // printf("\n\r test : len(pass_store):%d\n\r", len(pass_store));
     // printf("\n\r test : pass_store:\n\r");
     // disp_in_serial(pass_store);
     
     // SM3_Hash(pass_store, len(pass_store), (void*)pass_store_sm3);
-    // printf("SM3¹þÏ£ºóµÄpass_store:\n\r");
+    // printf("SM3��ϣ���pass_store:\n\r");
     // disp_in_serial(pass_store_sm3);
     // printf("\n\r");
 
-    // Ö÷Ñ­»·
+    // ��ѭ��
     while (1) {
-        /* ³õÊ¼»¯×´Ì¬ */
+        /* ��ʼ��״̬ */
         if (state.currentState == STATE_INIT) {
 						
             /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
@@ -219,7 +219,7 @@ int main(void) {
             // switch to state wait
             UpdateState(STATE_WAIT);
         }
-        /* ´ý»ú×´Ì¬ */
+        /* ����״̬ */
         else if (state.currentState == STATE_WAIT) {
             rand_delay();
             if (IsStateValid(STATE_WAIT)) {
@@ -228,7 +228,7 @@ int main(void) {
                 continue;
             }
             input_cursor = 0;
-            /* ¼ì²âµ½ÊäÈë£¬×ªµ½ÊäÈë×´Ì¬ */
+            /* ��⵽���룬ת������״̬ */
             if (flagInterrupt == 1) {
                 UpdateState(STATE_INPUT);
                 continue;
@@ -239,7 +239,7 @@ int main(void) {
                 //continue;
             }
         }
-        /* ÊäÈë×´Ì¬ */
+        /* ����״̬ */
         else if (state.currentState == STATE_INPUT) {
             rand_delay();
             last_check_time = clock();
@@ -266,10 +266,10 @@ int main(void) {
 									*/
 
                     flagInterrupt = 0;
-                    I2C_ZLG7290_Read(&hi2c1,0x71,0x01,Rx1_Buffer,1);	//¶Á¼üÖµ
-                    swtich_key();	//É¨Ãè¼üÖµ£¬Ð´±êÖ¾Î»
-                    I2C_ZLG7290_Read(&hi2c1,0x71,0x10,Rx2_Buffer,8);	//¶Á8Î»ÊýÂë¹Ü
-                    switch_flag();	//É¨Ãèµ½ÏàÓ¦µÄ°´¼ü²¢ÇÒÏòÊýÂë¹ÜÐ´½øÊýÖµ
+                    I2C_ZLG7290_Read(&hi2c1,0x71,0x01,Rx1_Buffer,1);	//����ֵ
+                    swtich_key();	//ɨ���ֵ��д��־λ
+                    I2C_ZLG7290_Read(&hi2c1,0x71,0x10,Rx2_Buffer,8);	//��8λ�����
+                    switch_flag();	//ɨ�赽��Ӧ�İ��������������д����ֵ
                     printf("flag: %d\n\r", flag);
 
                     if (flag == 14) {// #
@@ -286,27 +286,27 @@ int main(void) {
                         pass_buf[input_cursor++] = flag;
                     }
                 }
-              // todo: Òì³£!!!:ÎÞÐ§µÄ×Ö·û
+              // todo: �쳣!!!:��Ч���ַ�
             }
 						pass_buf[input_cursor] = 0;
-            // Òì³£: ÃÜÂë³¤¶È¹ý³¤
+            // �쳣: ���볤�ȹ���
             if (input_cursor >= MAX_PASSWORD_LEN) {
                 printf("Password is too long\n\r");
                 state.errorCode = EXCEPT_PASSLEN_LONG;
                 UpdateState(STATE_EXCEPTION);
                 continue;
             }
-            // Òì³£: ÃÜÂë³¤¶È¹ý¶Ì
+            // �쳣: ���볤�ȹ���
             else if (input_cursor < MIN_PASSWORD_LEN) {
                 printf("Password is too short\n\r");
                 state.errorCode = EXCEPT_PASSLEN_SHORT;
                 UpdateState(STATE_EXCEPTION);
                 continue;
             }
-            // todo: ÖØ¸´ÊäÈë**********************
+            // todo: �ظ�����**********************
 						IsStateValid(STATE_INPUT);
 						printf("editmode:%d\n", edit_mode);
-            /* ÊäÈëºÏ·¨ */
+            /* ����Ϸ� */
             if (edit_mode == 1) {
                 UpdateState(STATE_EDIT);
             }
@@ -319,7 +319,7 @@ int main(void) {
             }
 
         }
-        /* ÅÐ¶ÏÃÜÂë×´Ì¬ */
+        /* �ж�����״̬ */
         else if (state.currentState == STATE_CHECK) {
             rand_delay();
             if (IsStateValid(STATE_CHECK)) {
@@ -330,38 +330,38 @@ int main(void) {
             // printf("\n\rlen: %d  ", input_cursor);
             // printf("pass_buf:\n\r");
             // disp_in_serial(pass_buf);
-            /* ¶ÔÊäÈëµÄÃÜÂë½øÐÐSM3ÕªÒª */
+            /* ��������������SM3ժҪ */
             SM3_Hash(pass_buf, len(pass_buf), (void*)pass_buf_sm3);
             printf("SM3 hash value of pass_buf: ");
             disp_in_serial(pass_buf_sm3);
             printf("SM3 hash value of pass_store: ");
             disp_in_serial(pass_store_sm3);
             
-            /* ±È¶ÔÊäÈëÕªÒªºÍÕæÊµÃÜÂëÕªÒª */
+            /* �ȶ�����ժҪ����ʵ����ժҪ */
             if (IsPasswdValid()) {
-                printf("´æ´¢µÄÃÜÂëËð»µÇÒÎÞ·¨»Ö¸´\n\r");
+                printf("�洢�����������޷��ָ�\n\r");
                 while (1) {}
             }
             int cmp_res = cmp(pass_buf_sm3, pass_store_sm3, input_cursor);
-            if (cmp_res == 0) { // Æ¥Åä
-                // ÏÔÊ¾success
+            if (cmp_res == 0) { // ƥ��
+                // ��ʾsuccess
                 printf("password match!\n\r");
                 uint8_t success_code[] = {0xB6, 0xB6, 0x9E, 0x9C, 0x9C, 0x7C, 0xB6};
                 disp_str(success_code);
             
-            } else { // ²»Æ¥Åä
-                // ÏÔÊ¾error
+            } else { // ��ƥ��
+                // ��ʾerror
                 printf("password not match!\n\r");
                 // todo: edit code
                 uint8_t error_code[] = {0xB6, 0xB6, 0x9E, 0x9C, 0x9C, 0x7C, 0xB6};
                 disp_str(error_code);
             }
             
-            /* ·µ»Ø´ý»ú×´Ì¬ */
+            /* ���ش���״̬ */
             edit_mode = hashMark;
             UpdateState(STATE_WAIT);
         }
-        /* ÐÞ¸ÄÃÜÂë×´Ì¬ */
+        /* �޸�����״̬ */
         else if (state.currentState == STATE_EDIT) {
             rand_delay();
             if (IsStateValid(STATE_EDIT)) {
@@ -370,7 +370,7 @@ int main(void) {
                 continue;
             }
 
-            // ¸üÐÂÃÜÂë
+            // ��������
             for (int i = 0; i < MAX_PASSWORD_LEN; i++) {
                 if (i < input_cursor)
                     pass_store[i] = pass_buf[i];
@@ -380,24 +380,24 @@ int main(void) {
             SM3_Hash(pass_store, len(pass_store), (void*)pass_store_sm3);
             UpdatePasswdBackup();
 
-            // ÏÔÊ¾update
+            // ��ʾupdate
             uint8_t up_code[] = {0xCE, 0x7C};
             disp_str(up_code);
             printf("Password update to:\n");
             disp_in_serial(pass_store);
             
-            /* ·µ»Ø´ý»ú×´Ì¬ */
+            /* ���ش���״̬ */
             edit_mode = 0;
             UpdateState(STATE_WAIT);
         }
-        /* Òì³£×´Ì¬ */
-        else {	// default Òì³£
+        /* �쳣״̬ */
+        else {	// default �쳣
 //expcetion_handler:
             rand_delay();
             // =============
             uint8_t error_code[] = {0xB6, 0xB6, 0x9E, 0x9C, 0x9C, 0x7C, 0xB6};
             disp_str(error_code);
-            // ÐèÒªÑÓÊ±!!!
+            // ��Ҫ��ʱ!!!
             switch (state.errorCode) {
                 case EXCEPT_UNVALIAD_STATE:
 										printf("unvaliad state!\n");
@@ -451,7 +451,7 @@ void UpdateState(u8 nextState) {
         state.errorCode = 0;
     }
 
-    // todo: ±¸·Ýstate
+    // todo: ����state
 }
 
 void UpdatePasswdBackup() {
@@ -469,7 +469,7 @@ void UpdatePasswdBackup() {
 u8 IsPasswdValid() {
     u8 flag = 0;
     u8 validMask[N_BACKUP + 1] = {0};
-    /* Ê×ÏÈÐ£ÑéÃÜÂë±¸·Ý */
+    /* ����У�����뱸�� */
     u32 tmpCRC = 0;
     for (int i = 0; i < N_BACKUP; i++) {
 			tmpCRC = 0;
@@ -480,7 +480,7 @@ u8 IsPasswdValid() {
     }
 		tmpCRC = 0;
     // tmpCRC = HAL_CRC_Calculate(&hcrc, (u32*)pass_store_sm3, DIGEST_LEN / 4);
-    /* ¼ì²éÃÜÂë¹þÏ£ */
+    /* ��������ϣ */
     if (tmpCRC != passwdCRC) {
         flag = 1;
     }
@@ -495,7 +495,7 @@ u8 IsPasswdValid() {
         }
     }
 
-    /* ÈôÃÜÂëÊ§Ð§£¬³¢ÊÔ»Ö¸´ */
+    /* ������ʧЧ�����Իָ� */
     if (flag) {
         flag = ResumePasswd(validMask);
     }
@@ -513,7 +513,7 @@ u8 ResumePasswd(u8* validMask) {
         }
     }
     
-    /* ÕÒµ½Æ¥ÅäÊý×î¶àµÄÃÜÂë */
+    /* �ҵ�ƥ������������ */
     u8 maxVal = 0, maxInex = 0;
     for (int i = 0; i <= N_BACKUP; i++) {
         if (maxVal < validCnt[i]) {
@@ -521,11 +521,11 @@ u8 ResumePasswd(u8* validMask) {
             maxInex = i;
         }
     }
-    /* Ã»ÓÐÁ½¸öÏàÍ¬µÄÃÜÂë±¸·Ý£¬Õ¨ÁË */
+    /* û��������ͬ�����뱸�ݣ�ը�� */
     if (maxVal < 2) {
         return 1;
     }
-    /* »Ö¸´ÃÜÂë */
+    /* �ָ����� */
     mymemcpy((void*)pass_store_sm3, (void*)passwdCRCBackup[maxInex], DIGEST_LEN);
     UpdatePasswdBackup();
     return 0;
@@ -565,7 +565,7 @@ uint8_t cmp(uint8_t* arr1, uint8_t* arr2, uint8_t len){
     for (int i = 0; i < len; i++)
         if (arr1[i] != arr2[i])
             return 1;
-        // todo: ²àÐÅµÀ¹¥»÷
+        // todo: ���ŵ�����
     return 0;
 }
 
