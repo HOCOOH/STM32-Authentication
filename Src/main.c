@@ -86,6 +86,8 @@
 #define HOT_BOOT_FLAG 0x1234ABCD
 #define TIMEOUT_THRESHOLD 5
 
+#define N_BACKUP 3
+
 typedef struct {
     u8 currentState;
     u8 lastState;
@@ -95,6 +97,7 @@ typedef struct {
 u32 refreshCount = 0;
 u8 hashMark = 0;
 State state = {STATE_INIT, STATE_EXCEPTION, 0};
+State stateBackup[N_BACKUP + 1] = {0};
 uint8_t flag;//不同的按键有不同的标志位值
 uint8_t flagInterrupt = 0;//中断标志位，每次按键产生一次中断，并开始读取8个数码管的值
 uint8_t Rx2_Buffer[8]={0};
@@ -108,7 +111,10 @@ uint8_t pass_buf[MAX_PASSWORD_LEN + 1] = {0};
 uint8_t pass_buf_sm3[DIGEST_LEN + 1] = {0};
 uint8_t pass_store[MAX_PASSWORD_LEN + 1] = {0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0, 0};
 uint8_t pass_store_sm3[DIGEST_LEN + 1] = {0};
-u8 prev_state_table[N_STATE][N_STATE] = {
+u32 passwdCRC = 0;
+u8 passwdBackupSM3[N_BACKUP + 1][DIGEST_LEN + 1] = {0};
+u32 passwdCRCBackup[N_BACKUP + 1] = {0};
+u8 prev_state_table[N_STATE][N_STATE] = {	
 									{0, 0, 0, 0, 0, 1}, 
 									{1, 0, 1, 1, 1, 0},
 									{0, 1, 0, 0, 0, 0},
@@ -175,12 +181,18 @@ int main(void) {
             MX_GPIO_Init();
             MX_I2C1_Init();
             MX_USART1_UART_Init();
+            MX_CRC_Init();
 
+            /* Initialize variables */
             refreshCount = REFRESH_COUNT_INIT;
             input_cursor = 0;
+            for (int i = 0; i < MAX_PASSWORD_LEN; i++) {
+                pass_buf[i] = 0;
+            }
             
             rand_delay();
             SM3_Hash(pass_store, len(pass_store), (void*)pass_store_sm3);
+            UpdatePasswdBackup();
 
             // switch to state wait
             UpdateState(STATE_WAIT);
@@ -194,6 +206,7 @@ int main(void) {
                 continue;
             }
             input_cursor = 0;
+            /* 检测到输入，转到输入状态 */
             if (flagInterrupt == 1) {
                 UpdateState(STATE_INPUT);
                 continue;
@@ -264,6 +277,7 @@ int main(void) {
                 UpdateState(STATE_EXCEPTION);
                 continue;
             }
+            // todo: 重复输入**********************
 
             /* 输入合法 */
             if (edit_mode == 1) {
@@ -293,6 +307,10 @@ int main(void) {
             disp_in_serial(pass_store_sm3);
             
             /* 比对输入摘要和真实密码摘要 */
+            if (IsPasswdValid()) {
+                printf("存储的密码损坏且无法恢复\n\r");
+                while (1) {}
+            }
             int cmp_res = cmp(pass_buf_sm3, pass_store_sm3, input_cursor);
             if (cmp_res == 0) { // 匹配
                 // 显示success
@@ -329,6 +347,7 @@ int main(void) {
                     pass_store[i] = 0;
             }
             SM3_Hash(pass_store, len(pass_store), (void*)pass_store_sm3);
+            UpdatePasswdBackup();
 
             // 显示update
             uint8_t up_code[] = {0xCE, 0x7C};
@@ -374,7 +393,7 @@ u8 IsStateValid(u8 expectState) {
 		return 1;
 	}
 
-	// todo: check pre state
+	// check pre state
 	u8 check_pre_res = prev_state_table[state.currentState][state.lastState];
 	if (check_pre_res == 0)
 		return 1;
@@ -394,6 +413,79 @@ void UpdateState(u8 nextState) {
     // todo: 备份state
 }
 
+void UpdatePasswdBackup() {
+    passwdCRC = HAL_CRC_Calculate(&hcrc, (u32*)pass_store_sm3, DIGEST_LEN / 4);
+    for (int i = 0; i < N_BACKUP; i++) {
+        for (int j = 0; j < MAX_PASSWORD_LEN; j++) {
+            passwdBackupSM3[i][j] = pass_store_sm3[j];
+        }
+        passwdCRCBackup[i] = HAL_CRC_Calculate(&hcrc, (u32*)passwdBackupSM3[i], DIGEST_LEN / 4);
+    }
+}
+
+u8 IsPasswdValid() {
+    u8 flag = 0;
+    u8 validMask[N_BACKUP + 1] = {0};
+    /* 首先校验密码备份 */
+    u32 tmpCRC = 0;
+    for (int i = 0; i < N_BACKUP; i++) {
+        tmpCRC = HAL_CRC_Calculate(&hcrc, (u32*)passwdBackupSM3[i], DIGEST_LEN / 4);
+        if (tmpCRC == passwdCRCBackup[i]) {
+            validMask[i] = 1;
+        }
+    }
+    tmpCRC = HAL_CRC_Calculate(&hcrc, (u32*)pass_store_sm3, DIGEST_LEN / 4);
+    /* 检查密码哈希 */
+    if (tmpCRC != passwdCRC) {
+        flag = 1;
+    }
+    else {
+        validMask[N_BACKUP] = 1;
+        passwdCRCBackup[N_BACKUP] = tmpCRC;
+        memcpy(passwdCRCBackup[N_BACKUP], pass_store_sm3, DIGEST_LEN);
+        for (int i = 0; i < N_BACKUP; i++) {
+            if (validMask[i] && passwdCRCBackup[i] != passwdCRC) {
+                flag = 1;
+            }
+        }
+    }
+
+    /* 若密码失效，尝试恢复 */
+    if (flag) {
+        flag = ResumePasswd(validMask);
+    }
+
+    return flag;
+}
+
+u8 ResumePasswd(u8* validMask) {
+    u8 validCnt[N_BACKUP + 1] = {0};
+    for (int i = 0; i <= N_BACKUP; i++) {
+        for (int j = 0; j <= N_BACKUP; j++) {
+            if (validMask[i] && validMask[j] && passwdCRCBackup[i] == passwdCRCBackup[j]) {
+                validCnt[i]++;
+            }
+        }
+    }
+    
+    /* 找到匹配数最多的密码 */
+    u8 maxVal = 0, maxInex = 0;
+    for (int i = 0; i <= N_BACKUP; i++) {
+        if (maxVal < validCnt[i]) {
+            maxVal = validCnt[i];
+            maxInex = i;
+        }
+    }
+    /* 没有两个相同的密码备份，炸了 */
+    if (maxVal < 2) {
+        return 1;
+    }
+    /* 恢复密码 */
+    memcpy(pass_store_sm3, passwdCRCBackup[maxInex], DIGEST_LEN);
+    UpdatePasswdBackup();
+    return 0;
+}
+
 void disp_str(uint8_t* code) {
     // printf("Enter function disp_str!\n\r");
     for (int i = 0;i < len(code); i++) {
@@ -405,6 +497,14 @@ void disp_str(uint8_t* code) {
             I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);
             I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);					
         }
+    }
+}
+
+void memcpy(void* dest, const void* src, u32 len) {
+    u8* destp = (u8*)dest;
+    u8* srcp = (u8*)src;
+    for (u32 i = 0; i < len; i++) {
+        *destp++ = *srcp++;
     }
 }
 
@@ -420,7 +520,7 @@ uint8_t cmp(uint8_t* arr1, uint8_t* arr2, uint8_t len){
     for (int i = 0; i < len; i++)
         if (arr1[i] != arr2[i])
             return 1;
-        
+        // todo: 侧信道攻击
     return 0;
 }
 
