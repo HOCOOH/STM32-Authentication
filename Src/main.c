@@ -109,26 +109,24 @@ typedef struct {
 u32 boot_flag __attribute__((at(0x10000000)));
 
 //u32 refreshCount __attribute__((at(0x10002100))) = 0;
-u8 hashMark __attribute__((at(0x10001200))) = 0;
 State state __attribute__((at(0x10005000)));
 State stateBackup[N_BACKUP + 1]  __attribute__((at(0x10006000))) = {0};
 uint8_t flag __attribute__((at(0x10000500)));//不同的按键有不同的标志位值
 uint8_t flagInterrupt __attribute__((at(0x10000600))) = 0;//中断标志位，每次按键产生一次中断，并开始读取8个数码管的值
+uint8_t edit_mode __attribute__((at(0x10000A00)))  = 0;
+uint64_t time_count __attribute__((at(0x10000B00)))  = 0;
+uint8_t pass_buf[MAX_PASSWORD_LEN + 1] __attribute__((at(0x10000D00))) = {0};
+uint8_t pass_buf_sm3[DIGEST_LEN + 1] __attribute__((at(0x10000E00))) = {0};
+uint8_t input_cursor __attribute__((at(0x10001100))) = 0;
+u8 hashMark __attribute__((at(0x10001200))) = 0;
+Passwd passwdRAM __attribute__((at(0x10000F00))) = {0};
+
 uint8_t Rx2_Buffer[8] = {0};
 uint8_t Tx1_Buffer[8] = {0};
 uint8_t Rx1_Buffer[1] = {0};
-uint8_t edit_mode __attribute__((at(0x10000A00)))  = 0;
-uint64_t time_count __attribute__((at(0x10000B00)))  = 0;
+
+const u8 passwdDefault[MAX_PASSWORD_LEN + 1] = {0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0, 0};
 const double delay_choices[] = {5, 10, 15};
-uint8_t pass_buf[MAX_PASSWORD_LEN + 1] __attribute__((at(0x10000D00))) = {0};
-uint8_t pass_buf_sm3[DIGEST_LEN + 1] __attribute__((at(0x10000E00))) = {0};
-
-u8 passwdDefault[MAX_PASSWORD_LEN + 1] = {0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0, 0};
-
-// uint8_t pass_store_sm3[DIGEST_LEN + 1] = {0};
-// u32 passwdCRC = 0;
-
-Passwd passwdRAM __attribute__((at(0x10000F00))) = {0};
 const u8 prev_state_table[N_STATE][N_STATE] = {	
 									{0, 0, 0, 0, 0, 1}, 
 									{1, 0, 1, 1, 1, 0},
@@ -136,9 +134,6 @@ const u8 prev_state_table[N_STATE][N_STATE] = {
 									{0, 0, 1, 0, 0, 0},
 									{0, 0, 1, 0, 0, 0},
 									{1, 1, 1, 1, 1, 0} }; // exception待添加
-uint8_t input_cursor __attribute__((at(0x10001100))) = 0;
-
-// cold boot and hot boot
 
 /* USER CODE END PV */
 
@@ -162,16 +157,29 @@ u8 ResumePasswd(u8* validMask, Passwd* tmpPasswd);
 void mymemcpy(void* dest, const void* src, u32 len);
 void delay_ms(u32 time);
 uint8_t crc4_itu(uint8_t *data, uint16_t length);
+void UpdateStateBackup();
+
+void UpdateStateBackup() {
+    for (int i = 0; i < N_BACKUP; i++) {
+        mymemcpy((void*)(stateBackup + i), (void*)&state, sizeof(State));
+    }
+}
 
 int main(void) {
-		
     if (boot_flag != HOT_BOOT_FLAG) {
         // cold boot
 		boot_flag = HOT_BOOT_FLAG;
         // init
+        edit_mode = 0;
+        hashMark = 0;
+        input_cursor = 0;
+        time_count = 0;
+
+        // reset state
         state.currentState = STATE_INIT;
         state.lastState = STATE_EXCEPTION;
         state.errorCode = 0;
+        UpdateStateBackup();
 
         /* 冷启动恢复密码 */
         if (IsPasswdValid()) {
@@ -180,9 +188,6 @@ int main(void) {
         }
         //SM3_Hash(passwdDefault, len(passwdDefault), (void*)passwdRAM.hashVal);
         //UpdatePasswdBackup();
-
-
-
     } else {
         // hot boot
         // load the backend vars and check
@@ -217,18 +222,10 @@ int main(void) {
             MX_USART1_UART_Init();
             //MX_CRC_Init();
 
-            // write pass_store from flash
-            // STMFLASH_Write(PASS_STORE_ADDR, pass_test, MAX_PASSWORD_LEN);
-            // u32 pass_read_test[MAX_PASSWORD_LEN  + 1];
-            // STMFLASH_Read(PASS_STORE_ADDR, pass_read_test, MAX_PASSWORD_LEN);
-            // printf("After read!\n");
-            // printf("%x %x %x %x\n",pass_read_test[0], pass_read_test[1], pass_read_test[2],pass_read_test[3]);
-
-
             /* Initialize variables */
            // refreshCount = REFRESH_COUNT_INIT;
             input_cursor = 0;
-						edit_mode = 0;
+			edit_mode = 0;
             for (int i = 0; i < MAX_PASSWORD_LEN; i++) {
                 pass_buf[i] = 0;
             }
@@ -452,19 +449,20 @@ void delay_ms(u32 time){
 }
 
 u8 IsStateValid(u8 expectState) {
-	//printf("current state:%d\n", state.currentState);
-		//("last state:%d\n", state.lastState);
 	if (state.currentState != expectState) {
 		return 1;
 	}
-
 	// check pre state
 	u8 check_pre_res = prev_state_table[state.currentState][state.lastState];
-	
 	if (check_pre_res == 0) {
-		
 		return 1;
 	}
+    // check state backup
+    for (int i = 0; i < N_BACKUP; i++) {
+        if (cmp((u8*)&state, (u8*)(stateBackup + i), sizeof(State))) {
+            return 1;
+        }
+    }
 
 	return 0;	
 }
@@ -478,7 +476,8 @@ void UpdateState(u8 nextState) {
         state.errorCode = 0;
     }
 
-    // todo: 备份state
+    // 备份state
+    UpdatePasswdBackup();
 }
 
 uint8_t crc4_itu(uint8_t *data, uint16_t length) {
