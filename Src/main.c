@@ -284,7 +284,7 @@ int main(void) {
                         pass_buf[input_cursor++] = flag;
                     }
 										time_count = 0;
-              // todo: Òì³£!!!:ÎÞÐ§µÄ×Ö?
+              // todo: Òì³£!!!:ÎÞÐ§µÄ×Ö·
 									}
 								time_count++;
 							}
