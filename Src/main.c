@@ -57,7 +57,10 @@
 #define BUFFER_SIZE1              (countof(Tx1_Buffer))
 #define BUFFER_SIZE2              (countof(Rx2_Buffer))
 #define countof(a) (sizeof(a) / sizeof(*(a)))
-#define PASS_STORE_ADDR 0x080E0000
+
+#define FLASH_ADDR_BASE 0x080E0000
+#define ALIGN_PASSWD_BACKUP 0x100
+#define ADDR_PASSWD_BACKUP(i) (FLASH_ADDR_BASE + ((i) * ALIGN_PASSWD_BACKUP))
 
 /*
 #define MAX_USERNAME_LEN 6
@@ -83,6 +86,7 @@
 #define MAX_PASSWORD_LEN 12
 #define MIN_PASSWORD_LEN 5
 #define DIGEST_LEN 32
+#define PASSWD_LEN_U32 ((DIGEST_LEN + 4) / 4)
 
 #define REFRESH_COUNT_INIT 500
 #define HOT_BOOT_FLAG 0x1234ABCD
@@ -95,6 +99,12 @@ typedef struct {
     u8 lastState;
     u8 errorCode;
 } State;
+
+typedef struct {
+    u8 hashVal[DIGEST_LEN + 1];
+    u8 CRCVal;
+    u8 align[2];
+} Passwd;
 
 u32 boot_flag __attribute__((at(0x10000004)));
 
@@ -111,15 +121,18 @@ uint8_t edit_mode = 0;
 clock_t check_time, last_check_time = 0;
 double delay_choices[] = {0.05, 0.01, 0.015};
 
+u8 passwdDefault[MAX_PASSWORD_LEN + 1] = {0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0, 0};
 uint8_t pass_buf[MAX_PASSWORD_LEN + 1] = {0};
 uint8_t pass_buf_sm3[DIGEST_LEN + 1] = {0};
-uint8_t pass_store[MAX_PASSWORD_LEN + 1] = {0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0, 0};
-u32 pass_test[MAX_PASSWORD_LEN + 1] = {0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0, 0};
+// uint8_t pass_store[MAX_PASSWORD_LEN + 1] = {0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0, 0};
+// u32 pass_test[MAX_PASSWORD_LEN + 1] = {0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0, 0};
 
-uint8_t pass_store_sm3[DIGEST_LEN + 1] = {0};
-u32 passwdCRC = 0;
-u8 passwdBackupSM3[N_BACKUP + 1][DIGEST_LEN + 1] = {0};
-u32 passwdCRCBackup[N_BACKUP + 1] = {0};
+// uint8_t pass_store_sm3[DIGEST_LEN + 1] = {0};
+// u32 passwdCRC = 0;
+
+Passwd passwdRAM = {0};
+// u8 passwdBackupSM3[N_BACKUP + 1][DIGEST_LEN + 1] = {0};
+// u32 passwdCRCBackup[N_BACKUP + 1] = {0};
 u8 prev_state_table[N_STATE][N_STATE] = {	
 									{0, 0, 0, 0, 0, 1}, 
 									{1, 0, 1, 1, 1, 0},
@@ -149,21 +162,33 @@ u8 IsStateValid(u8 expectState);
 void rand_delay();
 void UpdatePasswdBackup();
 u8 IsPasswdValid();
-u8 ResumePasswd(u8* validMask);
+u8 ResumePasswd(u8* validMask, Passwd* tmpPasswd);
 void mymemcpy(void* dest, const void* src, u32 len);
+uint8_t crc4_itu(uint8_t *data, uint16_t length);
+
 int main(void) {
 		
     if (boot_flag != HOT_BOOT_FLAG) {
         // cold boot
-				boot_flag = HOT_BOOT_FLAG;
+		boot_flag = HOT_BOOT_FLAG;
         // init
         state.currentState = STATE_INIT;
         state.lastState = STATE_EXCEPTION;
         state.errorCode = 0;
+
+        /* ¿‰∆Ù∂Øª÷∏¥√‹¬Î */
+        if (IsPasswdValid()) {
+            printf("¥Ê¥¢µƒ√‹¬ÎÀªµ«“Œﬁ∑®ª÷∏¥\n\r");
+            while (1) {}
+        }
+        // SM3_Hash(passwdDefault, len(passwdDefault), (void*)passwdRAM.hashVal);
+        // UpdatePasswdBackup();
+
+
+
     } else {
         // hot boot
         // load the backend vars and check
-			//printf("Hot boot\n");
 
     }
     
@@ -183,7 +208,6 @@ int main(void) {
     while (1) {
         /* ≥ı ºªØ◊¥Ã¨ */
         if (state.currentState == STATE_INIT) {
-						
             /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
             HAL_Init();
 
@@ -195,26 +219,24 @@ int main(void) {
             MX_I2C1_Init();
             MX_USART1_UART_Init();
             //MX_CRC_Init();
-						
-						// write pass_store from flash
-						STMFLASH_Write(PASS_STORE_ADDR, pass_test, MAX_PASSWORD_LEN);
-						u32 pass_read_test[MAX_PASSWORD_LEN  + 1];
-						STMFLASH_Read(PASS_STORE_ADDR, pass_read_test, MAX_PASSWORD_LEN);
-						printf("After read!\n");
-						printf("%x %x %x %x\n",pass_read_test[0], pass_read_test[1], pass_read_test[2],pass_read_test[3]);
-						
-					
+
+            // write pass_store from flash
+            // STMFLASH_Write(PASS_STORE_ADDR, pass_test, MAX_PASSWORD_LEN);
+            // u32 pass_read_test[MAX_PASSWORD_LEN  + 1];
+            // STMFLASH_Read(PASS_STORE_ADDR, pass_read_test, MAX_PASSWORD_LEN);
+            // printf("After read!\n");
+            // printf("%x %x %x %x\n",pass_read_test[0], pass_read_test[1], pass_read_test[2],pass_read_test[3]);
+
+
             /* Initialize variables */
             refreshCount = REFRESH_COUNT_INIT;
             input_cursor = 0;
-						edit_mode = 0;
+			edit_mode = 0;
             for (int i = 0; i < MAX_PASSWORD_LEN; i++) {
                 pass_buf[i] = 0;
             }
-            
+
             rand_delay();
-            SM3_Hash(pass_store, len(pass_store), (void*)pass_store_sm3);
-            UpdatePasswdBackup();
 
             // switch to state wait
             UpdateState(STATE_WAIT);
@@ -311,13 +333,8 @@ int main(void) {
                 UpdateState(STATE_EDIT);
             }
             else {
-								printf("test!!!!\n");
-								IsStateValid(STATE_INPUT);
-								UpdateState(STATE_CHECK);
-								IsStateValid(STATE_INPUT);
-							
+				UpdateState(STATE_CHECK);
             }
-
         }
         /* ≈–∂œ√‹¬Î◊¥Ã¨ */
         else if (state.currentState == STATE_CHECK) {
@@ -335,14 +352,14 @@ int main(void) {
             printf("SM3 hash value of pass_buf: ");
             disp_in_serial(pass_buf_sm3);
             printf("SM3 hash value of pass_store: ");
-            disp_in_serial(pass_store_sm3);
+            disp_in_serial(passwdRAM.hashVal);
             
             /* ±»∂‘ ‰»Î’™“™∫Õ’Ê µ√‹¬Î’™“™ */
             if (IsPasswdValid()) {
                 printf("¥Ê¥¢µƒ√‹¬ÎÀªµ«“Œﬁ∑®ª÷∏¥\n\r");
                 while (1) {}
             }
-            int cmp_res = cmp(pass_buf_sm3, pass_store_sm3, input_cursor);
+            int cmp_res = cmp(pass_buf_sm3, passwdRAM.hashVal, input_cursor);
             if (cmp_res == 0) { // ∆•≈‰
                 // œ‘ æsuccess
                 printf("password match!\n\r");
@@ -371,20 +388,23 @@ int main(void) {
             }
 
             // ∏¸–¬√‹¬Î
-            for (int i = 0; i < MAX_PASSWORD_LEN; i++) {
-                if (i < input_cursor)
-                    pass_store[i] = pass_buf[i];
-                else
-                    pass_store[i] = 0;
+            // for (int i = 0; i < MAX_PASSWORD_LEN; i++) {
+            //     if (i < input_cursor)
+            //         pass_store[i] = pass_buf[i];
+            //     else
+            //         pass_store[i] = 0;
+            // }
+            for (int i = input_cursor; i < MAX_PASSWORD_LEN; i++) {
+                pass_buf[i] = 0;
             }
-            SM3_Hash(pass_store, len(pass_store), (void*)pass_store_sm3);
+            SM3_Hash(pass_buf, len(pass_buf), (void*)passwdRAM.hashVal);
             UpdatePasswdBackup();
 
             // œ‘ æupdate
             uint8_t up_code[] = {0xCE, 0x7C};
             disp_str(up_code);
             printf("Password update to:\n");
-            disp_in_serial(pass_store);
+            disp_in_serial(pass_buf);
             
             /* ∑µªÿ¥˝ª˙◊¥Ã¨ */
             edit_mode = 0;
@@ -418,7 +438,7 @@ int main(void) {
                 default:
                     //UpdateState(STATE_INIT);
             }
-						UpdateState(STATE_INIT);
+			UpdateState(STATE_INIT);
         }
     }
 
@@ -446,7 +466,7 @@ void UpdateState(u8 nextState) {
     // TODO: check if next state is vaild
     state.lastState = state.currentState;
     state.currentState = nextState;
-    // TODO: edit error code 
+
     if (nextState != STATE_EXCEPTION) {
         state.errorCode = 0;
     }
@@ -454,15 +474,28 @@ void UpdateState(u8 nextState) {
     // todo: ±∏∑›state
 }
 
+uint8_t crc4_itu(uint8_t *data, uint16_t length) {
+    uint8_t i;
+    uint8_t crc = 0;                // Initial value
+    while(length--)
+    {
+        crc ^= *data++;                 // crc ^= *data; data++;
+        for (i = 0; i < 8; ++i)
+        {
+            if (crc & 1)
+                crc = (crc >> 1) ^ 0x0C;// 0x0C = (reverse 0x03)>>(8-4)
+            else
+                crc = (crc >> 1);
+        }
+    }
+    return crc;
+}
+
 void UpdatePasswdBackup() {
-  passwdCRC = 0;  
+    passwdRAM.CRCVal = crc4_itu(passwdRAM.hashVal, DIGEST_LEN);
 	// passwdCRC = HAL_CRC_Calculate(&hcrc, (u32*)pass_store_sm3, DIGEST_LEN / 4);
     for (int i = 0; i < N_BACKUP; i++) {
-        for (int j = 0; j < MAX_PASSWORD_LEN; j++) {
-            passwdBackupSM3[i][j] = pass_store_sm3[j];
-        }
-				passwdCRCBackup[i] = 0;
-        //passwdCRCBackup[i] = HAL_CRC_Calculate(&hcrc, (u32*)passwdBackupSM3[i], DIGEST_LEN / 4);
+        STMFLASH_Write(ADDR_PASSWD_BACKUP(i), (u32*)&passwdRAM, PASSWD_LEN_U32);
     }
 }
 
@@ -471,25 +504,25 @@ u8 IsPasswdValid() {
     u8 validMask[N_BACKUP + 1] = {0};
     /*  ◊œ»–£—È√‹¬Î±∏∑› */
     u32 tmpCRC = 0;
+    Passwd tmpPasswd[N_BACKUP + 1] = {0};
     for (int i = 0; i < N_BACKUP; i++) {
-			tmpCRC = 0;
-        //tmpCRC = HAL_CRC_Calculate(&hcrc, (u32*)passwdBackupSM3[i], DIGEST_LEN / 4);
-        if (tmpCRC == passwdCRCBackup[i]) {
+        STMFLASH_Read(ADDR_PASSWD_BACKUP(i), (u32*)(tmpPasswd + i), PASSWD_LEN_U32);
+		tmpCRC = crc4_itu(tmpPasswd[i].hashVal, DIGEST_LEN);;
+        if (tmpCRC == tmpPasswd[i].CRCVal) {
             validMask[i] = 1;
         }
     }
-		tmpCRC = 0;
-    // tmpCRC = HAL_CRC_Calculate(&hcrc, (u32*)pass_store_sm3, DIGEST_LEN / 4);
+	tmpCRC = crc4_itu(passwdRAM.hashVal, DIGEST_LEN);;
     /* ºÏ≤È√‹¬Îπ˛œ£ */
-    if (tmpCRC != passwdCRC) {
+    if (tmpCRC != passwdRAM.CRCVal) {
         flag = 1;
     }
     else {
         validMask[N_BACKUP] = 1;
-        passwdCRCBackup[N_BACKUP] = tmpCRC;
-        mymemcpy((void*)passwdCRCBackup[N_BACKUP], (void*)pass_store_sm3, DIGEST_LEN);
+        tmpPasswd[N_BACKUP].CRCVal = tmpCRC;
+        mymemcpy((void*)tmpPasswd[N_BACKUP].hashVal, (void*)passwdRAM.hashVal, DIGEST_LEN);
         for (int i = 0; i < N_BACKUP; i++) {
-            if (validMask[i] && passwdCRCBackup[i] != passwdCRC) {
+            if (validMask[i] && tmpPasswd[i].CRCVal != passwdRAM.CRCVal) {
                 flag = 1;
             }
         }
@@ -497,17 +530,17 @@ u8 IsPasswdValid() {
 
     /* »Ù√‹¬Î ß–ß£¨≥¢ ‘ª÷∏¥ */
     if (flag) {
-        flag = ResumePasswd(validMask);
+        flag = ResumePasswd(validMask, tmpPasswd);
     }
 
     return flag;
 }
 
-u8 ResumePasswd(u8* validMask) {
+u8 ResumePasswd(u8* validMask, Passwd* tmpPasswd) {
     u8 validCnt[N_BACKUP + 1] = {0};
     for (int i = 0; i <= N_BACKUP; i++) {
         for (int j = 0; j <= N_BACKUP; j++) {
-            if (validMask[i] && validMask[j] && passwdCRCBackup[i] == passwdCRCBackup[j]) {
+            if (validMask[i] && validMask[j] && tmpPasswd[i].CRCVal == tmpPasswd[j].CRCVal) {
                 validCnt[i]++;
             }
         }
@@ -526,7 +559,7 @@ u8 ResumePasswd(u8* validMask) {
         return 1;
     }
     /* ª÷∏¥√‹¬Î */
-    mymemcpy((void*)pass_store_sm3, (void*)passwdCRCBackup[maxInex], DIGEST_LEN);
+    mymemcpy((void*)passwdRAM.hashVal, (void*)tmpPasswd[maxInex].hashVal, DIGEST_LEN);
     UpdatePasswdBackup();
     return 0;
 }
