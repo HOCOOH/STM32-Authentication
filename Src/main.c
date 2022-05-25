@@ -110,8 +110,8 @@ u32 boot_flag __attribute__((at(0x10000000)));
 
 //u32 refreshCount __attribute__((at(0x10002100))) = 0;
 u8 hashMark __attribute__((at(0x10001200))) = 0;
-State state  = {STATE_INIT, STATE_EXCEPTION, 0};
-State stateBackup[N_BACKUP + 1]  = {0};
+State state __attribute__((at(0x10005000)));
+State stateBackup[N_BACKUP + 1]  __attribute__((at(0x10006000))) = {0};
 uint8_t flag __attribute__((at(0x10000500)));//不同的按键有不同的标志位值
 uint8_t flagInterrupt __attribute__((at(0x10000600))) = 0;//中断标志位，每次按键产生一次中断，并开始读取8个数码管的值
 uint8_t Rx2_Buffer[8] = {0};
@@ -136,7 +136,7 @@ const u8 prev_state_table[N_STATE][N_STATE] = {
 									{0, 0, 1, 0, 0, 0},
 									{0, 0, 1, 0, 0, 0},
 									{1, 1, 1, 1, 1, 0} }; // exception待添加
-uint8_t __attribute__((at(0x10001100))) input_cursor = 0;
+uint8_t input_cursor __attribute__((at(0x10001100))) = 0;
 
 // cold boot and hot boot
 
