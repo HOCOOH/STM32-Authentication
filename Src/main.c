@@ -158,6 +158,7 @@ void mymemcpy(void* dest, const void* src, u32 len);
 void delay_ms(u32 time);
 uint8_t crc4_itu(uint8_t *data, uint16_t length);
 void UpdateStateBackup();
+void GlobalInit();
 
 void UpdateStateBackup() {
     for (int i = 0; i < N_BACKUP; i++) {
@@ -165,29 +166,42 @@ void UpdateStateBackup() {
     }
 }
 
+void GlobalInit() {
+    edit_mode = 0;
+    hashMark = 0;
+    input_cursor = 0;
+    time_count = 0;
+    flag = 0;//不同的按键有不同的标志位值
+    flagInterrupt = 0;//中断标志位，每次按键产生一次中断，并开始读取8个数码管的值
+    for (int i = 0; i <= MAX_PASSWORD_LEN; i++) {
+        pass_buf[i] = 0;
+    }
+    for (int i = 0; i <= DIGEST_LEN; i++) {
+        pass_buf_sm3[i] = 0;
+    }
+    passwdRAM = (Passwd){0};
+
+    // reset state
+    state.currentState = STATE_INIT;
+    state.lastState = STATE_EXCEPTION;
+    state.errorCode = 0;
+    UpdateStateBackup();
+}
+
 int main(void) {
     if (boot_flag != HOT_BOOT_FLAG) {
         // cold boot
 		boot_flag = HOT_BOOT_FLAG;
         // init
-        edit_mode = 0;
-        hashMark = 0;
-        input_cursor = 0;
-        time_count = 0;
-
-        // reset state
-        state.currentState = STATE_INIT;
-        state.lastState = STATE_EXCEPTION;
-        state.errorCode = 0;
-        UpdateStateBackup();
+        GlobalInit();
 
         /* 冷启动恢复密码 */
         if (IsPasswdValid()) {
-            printf("存储的密码损坏且无法恢复\n\r");
-            while (1) {}
+            // printf("存储的密码损坏且无法恢复\n\r");
+            // while (1) {}
+            SM3_Hash(passwdDefault, len(passwdDefault), (void*)passwdRAM.hashVal);
+            UpdatePasswdBackup();
         }
-        //SM3_Hash(passwdDefault, len(passwdDefault), (void*)passwdRAM.hashVal);
-        //UpdatePasswdBackup();
     } else {
         // hot boot
         // load the backend vars and check
@@ -196,7 +210,7 @@ int main(void) {
     
     // printf("\n\r");
     // printf("\n\r===================================\n\r");
-    printf("\n\r FS-STM32身份验证系统\n\r");
+    // printf("\n\r FS-STM32身份验证系统\n\r");
     // printf("\n\r test : len(pass_store):%d\n\r", len(pass_store));
     // printf("\n\r test : pass_store:\n\r");
     // disp_in_serial(pass_store);
