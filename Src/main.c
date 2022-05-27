@@ -82,7 +82,7 @@
 #define EXCEPT_TIMEOUT 2
 #define EXCEPT_PASSLEN_LONG 3
 #define EXCEPT_PASSLEN_SHORT 4
-#define  EXCEPT_UNVALIAD_INPUT 5
+#define EXCEPT_UNVALIAD_INPUT 5
 
 #define MAX_PASSWORD_LEN 12
 #define MIN_PASSWORD_LEN 5
@@ -95,9 +95,11 @@
 
 #define N_BACKUP 3
 
-#define CODE_TRAP {asm("nop");\
-									asm("nop");\
-									asm("jmp __start");}
+#define CODE_TRAP { asm("nop");\
+				    asm("nop");\
+					asm("jmp __start");}
+
+#define DEALY_LIMIT 500
 
 typedef struct {
     u8 currentState;
@@ -131,7 +133,7 @@ uint8_t Tx1_Buffer[8] = {0};
 uint8_t Rx1_Buffer[1] = {0};
 
 u8 passwdDefault[MAX_PASSWORD_LEN + 1] = {0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0, 0};
-const double delay_choices[] = {5, 10, 15};
+u32 total_delay = 0;
 const u8 prev_state_table[N_STATE][N_STATE] = {	
 									{0, 0, 0, 0, 0, 1}, 
 									{1, 0, 1, 1, 1, 0},
@@ -147,54 +149,36 @@ void SystemClock_Config(void);
 
 /* USER CODE BEGIN PFP */
 /* Private function prototypes -----------------------------------------------*/
-void swtich_key(void);
-void switch_flag(void);
-void disp_str(uint8_t* code);
-uint8_t cmp(uint8_t* arr1, uint8_t* arr2, uint8_t len);
-uint32_t len(uint8_t* arr);
-void disp_in_serial(uint8_t* arr);
+void GlobalInit();
+
+// 状态相关函数
 void UpdateState(u8 nextState);
 u8 IsStateValid(u8 expectState);
 u8 IsStateValid1(u8 expectState);
 u8 IsStateValid2(u8 expectState);
-void rand_delay();
+void UpdateStateBackup();
+
+// 密码相关函数
 void UpdatePasswdBackup();
 u8 IsPasswdValid();
 u8 ResumePasswd(u8* validMask, Passwd* tmpPasswd);
-void mymemcpy(void* dest, const void* src, u32 len);
-void delay_ms(u32 time);
 uint8_t crc4_itu(uint8_t *data, uint16_t length);
-void UpdateStateBackup();
-void GlobalInit();
+
+// 输入输出相关
+void swtich_key(void);
+void switch_flag(void);
+void I2C_Safe_Write(I2C_HandleTypeDef *I2Cx, uint8_t I2C_Addr, uint8_t addr, uint8_t *w_buf, uint8_t num);
+uint8_t I2C_check_write(I2C_HandleTypeDef *I2Cx, uint8_t I2C_Addr, uint8_t addr, uint8_t *check_value, uint8_t num);
 void disp_null();
+void disp_str(uint8_t* code);
+void disp_in_serial(uint8_t* arr);
 
-void UpdateStateBackup() {
-    for (int i = 0; i < N_BACKUP; i++) {
-        mymemcpy((void*)(stateBackup + i), (void*)&state, sizeof(State));
-    }
-}
-
-void GlobalInit() {
-    edit_mode = 0;
-    hashMark = 0;
-    input_cursor = 0;
-    
-    flag = 0;//不同的按键有不同的标志位值
-    flagInterrupt = 0;//中断标志位，每次按键产生一次中断，并开始读取8个数码管的值
-    for (int i = 0; i <= MAX_PASSWORD_LEN; i++) {
-        pass_buf[i] = 0;
-    }
-    for (int i = 0; i <= DIGEST_LEN; i++) {
-        pass_buf_sm3[i] = 0;
-    }
-    passwdRAM = (Passwd){0};
-
-    // reset state
-    state.currentState = STATE_INIT;
-    state.lastState = STATE_EXCEPTION;
-    state.errorCode = 0;
-    UpdateStateBackup();
-}
+// 功能函数
+void rand_delay();
+void delay_ms(u32 time);
+void mymemcpy(void* dest, const void* src, u32 len);
+uint8_t cmp(uint8_t* arr1, uint8_t* arr2, uint8_t len);
+uint32_t len(uint8_t* arr);
 
 int main(void) {
     if (boot_flag != HOT_BOOT_FLAG) {
@@ -214,21 +198,19 @@ int main(void) {
         // hot boot
         // load the backend vars and check
 			/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-           HAL_Init();
+        HAL_Init();
 
-            /* Configure the system clock */
-            SystemClock_Config();
+        /* Configure the system clock */
+        SystemClock_Config();
 
-            /* Initialize all configured peripherals */
-            MX_GPIO_Init();
-            MX_I2C1_Init();
-            MX_USART1_UART_Init();
-				time_count = 0;
-				if (input_cursor != 0) {
-					goto hot_restart;
-				}
-				
-
+        /* Initialize all configured peripherals */
+        MX_GPIO_Init();
+        MX_I2C1_Init();
+        MX_USART1_UART_Init();
+        time_count = 0;
+        if (input_cursor != 0) {
+            goto hot_restart;
+        }
     }
     
     // printf("\n\r");
@@ -305,24 +287,24 @@ int main(void) {
 						time_count = 0;
             // get input 
             while (input_cursor < MAX_PASSWORD_LEN) {
-							hot_restart:							
-								if (time_count > 5000000 * TIMEOUT_THRESHOLD) {
-									time_count = 0;
-									state.errorCode = EXCEPT_TIMEOUT;
-                  UpdateState(STATE_EXCEPTION); // return wait state 
-									goto expcetion_handler;
-								}
+                hot_restart:							
+                    if (time_count > 5000000 * TIMEOUT_THRESHOLD) {
+                        time_count = 0;
+                        state.errorCode = EXCEPT_TIMEOUT;
+                        UpdateState(STATE_EXCEPTION); // return wait state 
+                        goto expcetion_handler;
+                    }
 								
                 if(flagInterrupt == 1) {
                     flagInterrupt = 0;
                     I2C_ZLG7290_Read(&hi2c1,0x71,0x01,Rx1_Buffer,1);	//读键值
                     swtich_key();	//扫描键值，写标志位
-										u8 tmpFlag = flag;
-									  I2C_ZLG7290_Read(&hi2c1,0x71,0x01,Rx1_Buffer,1);	//读键值
+					u8 tmpFlag = flag;
+					I2C_ZLG7290_Read(&hi2c1,0x71,0x01,Rx1_Buffer,1);	//读键值
                     swtich_key();	//扫描键值，写标志位
-										if (flag != tmpFlag) {
-												continue;
-										}
+                    if (flag != tmpFlag) {
+                            continue;
+                    }
                     I2C_ZLG7290_Read(&hi2c1,0x71,0x10,Rx2_Buffer,8);	//读8位数码管
                     switch_flag();	//扫描到相应的按键并且向数码管写进数值
                     printf("flag: %d\n\r", flag);
@@ -345,13 +327,13 @@ int main(void) {
                     else {
                         pass_buf[input_cursor++] = flag;
                     }
-										time_count = 0;
-              // todo: 异常!!!:无效的字?
-									}
-								time_count++;
-							}
+					time_count = 0;
+                 // todo: 异常!!!:无效的字?
+				}
+				time_count++;
+			}
             
-						pass_buf[input_cursor] = 0;
+			pass_buf[input_cursor] = 0;
             // 异常: 密码长度过长
             if (input_cursor >= MAX_PASSWORD_LEN) {
                 printf("Password is too long\n\r");
@@ -367,8 +349,8 @@ int main(void) {
                 continue;
             }
             // todo: 重复输入**********************
-						IsStateValid(STATE_INPUT);
-						printf("editmode:%d\n", edit_mode);
+            IsStateValid(STATE_INPUT);
+            printf("editmode:%d\n", edit_mode);
             /* 输入合法 */
             if (edit_mode == 1) {
                 UpdateState(STATE_EDIT);
@@ -400,7 +382,15 @@ int main(void) {
                 printf("存储的密码损坏且无法恢复\n\r");
                 while (1) {}
             }
-            int cmp_res = cmp(pass_buf_sm3, passwdRAM.hashVal, input_cursor);
+
+            u8 cmp_res1 = cmp(pass_buf_sm3, passwdRAM.hashVal, DIGEST_LEN);
+            u8 cmp_res2 = cmp(pass_buf_sm3, passwdRAM.hashVal, DIGEST_LEN);
+            u8 cmp_res = cmp_res1;
+            
+            if (cmp_res1 != cmp_res2) {
+                cmp_res = cmp(pass_buf_sm3, passwdRAM.hashVal, DIGEST_LEN);
+            }
+            
             if (cmp_res == 0) { // 匹配
                 // 显示success
                 printf("password match!\n\r");
@@ -487,18 +477,36 @@ expcetion_handler:
 						UpdateState(STATE_INIT);
         }
     }
+}
 
+void GlobalInit() {
+    edit_mode = 0;
+    hashMark = 0;
+    input_cursor = 0;
+    
+    flag = 0;//不同的按键有不同的标志位值
+    flagInterrupt = 0;//中断标志位，每次按键产生一次中断，并开始读取8个数码管的值
+    for (int i = 0; i <= MAX_PASSWORD_LEN; i++) {
+        pass_buf[i] = 0;
+    }
+    for (int i = 0; i <= DIGEST_LEN; i++) {
+        pass_buf_sm3[i] = 0;
+    }
+    passwdRAM = (Passwd){0};
+
+    // reset state
+    state.currentState = STATE_INIT;
+    state.lastState = STATE_EXCEPTION;
+    state.errorCode = 0;
+    UpdateStateBackup();
 }
-void delay_ms(u32 time){    
-   u32 i=0;  
-   while(time--)
-   {
-      i=60000;
-      while(i--) ;    
-   }
-	 return;
-	 CODE_TRAP
+void UpdateStateBackup() {
+    for (int i = 0; i < N_BACKUP; i++) {
+        mymemcpy((void*)(stateBackup + i), (void*)&state, sizeof(State));
+    }
 }
+
+
 
 u8 IsStateValid(u8 expectState) {
 	u8 randNum = rand() % 2;
@@ -651,6 +659,31 @@ u8 ResumePasswd(u8* validMask, Passwd* tmpPasswd) {
     return 0;
 }
 
+
+void I2C_Safe_Write(I2C_HandleTypeDef *I2Cx, uint8_t I2C_Addr, uint8_t addr, uint8_t *w_buf, uint8_t num) {
+    I2C_ZLG7290_Write(&hi2c1,I2C_Addr,addr,w_buf,num);
+    if (I2C_check_write(I2Cx, I2C_Addr, addr, w_buf,num) == 0) {
+        // 写入成功
+        return;
+    } else {
+        // 重新写入
+        I2C_ZLG7290_Write(&hi2c1,I2C_Addr,addr,w_buf,num);
+    }
+}
+
+uint8_t I2C_check_write(I2C_HandleTypeDef *I2Cx, uint8_t I2C_Addr, uint8_t addr, uint8_t *check_value, uint8_t num) {
+    
+    uint8_t read_buf[8] = {0};
+    I2C_ZLG7290_Read(&hi2c1,I2C_Addr,addr,read_buf,num);
+    if (cmp(read_buf, check_value, num) == 0) {
+        // 写入成功
+        return 0;
+    } else {
+        // 写入失败
+        return 1;
+    }
+}
+
 void disp_str(uint8_t* code) {
 			disp_null();
     // printf("Enter function disp_str!\n\r");
@@ -669,8 +702,17 @@ void disp_str(uint8_t* code) {
 
 void disp_null() {
     // printf("Enter function disp_str!\n\r");
-			u8 code[8] = {0};					
-      I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,code,8);				
+	u8 code[8] = {0};					
+    I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,code,8);				
+}
+
+
+void disp_in_serial(uint8_t* arr) {
+    // printf("Enter function disp_in_serial!\n\r");
+    for (int i = 0; i < len(arr); i++) {
+        printf("%x", arr[i]);
+    }
+    printf("\n\r\n\r");
 }
 
 void mymemcpy(void* dest, const void* src, u32 len) {
@@ -681,13 +723,6 @@ void mymemcpy(void* dest, const void* src, u32 len) {
     }
 }
 
-void disp_in_serial(uint8_t* arr) {
-    // printf("Enter function disp_in_serial!\n\r");
-    for (int i = 0; i < len(arr); i++) {
-        printf("%x", arr[i]);
-    }
-    printf("\n\r\n\r");
-}
 uint8_t cmp(uint8_t* arr1, uint8_t* arr2, uint8_t len){
     //printf("Enter function cmp!\n\r");
     for (int i = 0; i < len; i++)
@@ -711,11 +746,25 @@ uint32_t len(uint8_t* arr){
 }
 
 void rand_delay() {
-		unsigned int seed = 12345;
+	unsigned int seed = 12345;
     srand(seed);
-    u8  choice = rand() % 3;
-    double nms = delay_choices[choice];
-		delay_ms(nms);
+    u8 nms = rand() % 50;
+    if (total_delay > DEALY_LIMIT) {
+        nms = 0;
+    } else {
+        total_delay = total_delay + nms;
+    }
+	delay_ms(nms);
+}
+
+void delay_ms(u32 time) {
+   u32 i=0;  
+   while(time-- > 0) {
+      i=60000;
+      while(i--) ;    
+    }
+	return;
+	CODE_TRAP
 }
 
 /** System Clock Configuration
