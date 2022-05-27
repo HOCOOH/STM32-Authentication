@@ -31,7 +31,14 @@
   ******************************************************************************
   */
 /* Includes ------------------------------------------------------------------*/
+
+/* Maximum Timeout values for flags and events waiting loops. These timeouts are
+not based on accurate values, they just guarantee that the application will 
+not remain stuck if the I2C communication is corrupted.
+You may modify these timeout values depending on CPU frequency and application
+conditions (interrupts routines ...). */   
 #include "stm32f4xx_hal.h"
+#include "zlg7290.h"
 #include "i2c.h"
 #include "usart.h"
 #include "gpio.h"
@@ -93,6 +100,10 @@
 #define HOT_BOOT_FLAG 0x1234ABCD
 #define TIMEOUT_THRESHOLD 5
 
+
+#define HAL_I2C_RW_THRESHOLD 4
+#define I2C_Open_LONG_TIMEOUT ((uint32_t)0xffff)
+
 #define N_BACKUP 3
 
 #define CODE_TRAP { asm("nop");\
@@ -142,6 +153,8 @@ const u8 prev_state_table[N_STATE][N_STATE] = {
 									{0, 0, 1, 0, 0, 0},
 									{1, 1, 1, 1, 1, 0} }; // exception待添加
 
+__IO uint32_t  I2CTimeout = I2C_Open_LONG_TIMEOUT;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -167,6 +180,7 @@ uint8_t crc4_itu(uint8_t *data, uint16_t length);
 // 输入输出相关
 void swtich_key(void);
 void switch_flag(void);
+void I2C_Safe_Read(I2C_HandleTypeDef *I2Cx, uint8_t I2C_Addr, uint8_t addr, uint8_t *w_buf, uint8_t num);
 void I2C_Safe_Write(I2C_HandleTypeDef *I2Cx, uint8_t I2C_Addr, uint8_t addr, uint8_t *w_buf, uint8_t num);
 uint8_t I2C_check_write(I2C_HandleTypeDef *I2Cx, uint8_t I2C_Addr, uint8_t addr, uint8_t *check_value, uint8_t num);
 void disp_null();
@@ -297,15 +311,15 @@ int main(void) {
 								
                 if(flagInterrupt == 1) {
                     flagInterrupt = 0;
-                    I2C_ZLG7290_Read(&hi2c1,0x71,0x01,Rx1_Buffer,1);	//读键值
+                    I2C_Safe_Read(&hi2c1,0x71,0x01,Rx1_Buffer,1);	//读键值
                     swtich_key();	//扫描键值，写标志位
 					u8 tmpFlag = flag;
-					I2C_ZLG7290_Read(&hi2c1,0x71,0x01,Rx1_Buffer,1);	//读键值
+					I2C_Safe_Read(&hi2c1,0x71,0x01,Rx1_Buffer,1);	//读键值
                     swtich_key();	//扫描键值，写标志位
                     if (flag != tmpFlag) {
                             continue;
                     }
-                    I2C_ZLG7290_Read(&hi2c1,0x71,0x10,Rx2_Buffer,8);	//读8位数码管
+                    I2C_Safe_Read(&hi2c1,0x71,0x10,Rx2_Buffer,8);	//读8位数码管
                     switch_flag();	//扫描到相应的按键并且向数码管写进数值
                     printf("flag: %d\n\r", flag);
 
@@ -319,10 +333,10 @@ int main(void) {
                         hashMark = 1;
                         break;
                     }
-										else if (flag == 16 && hashMark == 1) { // *
+                    else if (flag == 16 && hashMark == 1) { // *
                         state.errorCode = EXCEPT_UNVALIAD_INPUT;
-												UpdateState(STATE_EXCEPTION); // return wait state 
-												goto expcetion_handler;
+                        UpdateState(STATE_EXCEPTION); // return wait state 
+                        goto expcetion_handler;
                     }
                     else {
                         pass_buf[input_cursor++] = flag;
@@ -659,6 +673,16 @@ u8 ResumePasswd(u8* validMask, Passwd* tmpPasswd) {
     return 0;
 }
 
+void I2C_Safe_Read(I2C_HandleTypeDef *I2Cx,uint8_t I2C_Addr,uint8_t addr,uint8_t *buf,uint8_t num) {
+	uint8_t memread_cnt = 0;
+    while(HAL_I2C_Mem_Read (I2Cx ,I2C_Addr,addr,I2C_MEMADD_SIZE_8BIT,buf,num,I2CTimeout) != HAL_OK ) {
+		memread_cnt++;
+		if (memread_cnt > HAL_I2C_RW_THRESHOLD) {
+			MX_I2C1_Init();
+			memread_cnt = 0;
+		}
+	}
+}
 
 void I2C_Safe_Write(I2C_HandleTypeDef *I2Cx, uint8_t I2C_Addr, uint8_t addr, uint8_t *w_buf, uint8_t num) {
     I2C_ZLG7290_Write(&hi2c1,I2C_Addr,addr,w_buf,num);
@@ -672,9 +696,8 @@ void I2C_Safe_Write(I2C_HandleTypeDef *I2Cx, uint8_t I2C_Addr, uint8_t addr, uin
 }
 
 uint8_t I2C_check_write(I2C_HandleTypeDef *I2Cx, uint8_t I2C_Addr, uint8_t addr, uint8_t *check_value, uint8_t num) {
-    
     uint8_t read_buf[8] = {0};
-    I2C_ZLG7290_Read(&hi2c1,I2C_Addr,addr,read_buf,num);
+    I2C_Safe_Read(&hi2c1,I2C_Addr,addr,read_buf,num);
     if (cmp(read_buf, check_value, num) == 0) {
         // 写入成功
         return 0;
@@ -685,16 +708,16 @@ uint8_t I2C_check_write(I2C_HandleTypeDef *I2Cx, uint8_t I2C_Addr, uint8_t addr,
 }
 
 void disp_str(uint8_t* code) {
-			disp_null();
+    disp_null();
     // printf("Enter function disp_str!\n\r");
     for (int i = 0;i < len(code); i++) {
-        I2C_ZLG7290_Read(&hi2c1,0x71,0x10,Rx2_Buffer,8);
+        I2C_Safe_Read(&hi2c1,0x71,0x10,Rx2_Buffer,8);
         Tx1_Buffer[0] = code[i];
         if(Rx2_Buffer[0] == 0) {
-            I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
+            I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
         } else {									
-            I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);
-            I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);					
+            I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);
+            I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);					
         }
     }
 
@@ -703,7 +726,7 @@ void disp_str(uint8_t* code) {
 void disp_null() {
     // printf("Enter function disp_str!\n\r");
 	u8 code[8] = {0};					
-    I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,code,8);				
+    I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,code,8);				
 }
 
 
@@ -868,172 +891,172 @@ void switch_flag(void){
                 Tx1_Buffer[0] = 0x0c;
                 if(Rx2_Buffer[0] == 0)
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
                     }
                     else
                     {									
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);					
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);					
                     }
                 break;
             case 2:
                 Tx1_Buffer[0] = 0xDA;
                 if(Rx2_Buffer[0] == 0)
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
                     }
                     else
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);		
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);		
                     }
                 break;
             case 3:
                 Tx1_Buffer[0] = 0xF2;
                 if(Rx2_Buffer[0] == 0)
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
                     }
                     else
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);						
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);		
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);						
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);		
                     }
                 break;
             case 4:
                 Tx1_Buffer[0] = 0x66;
                 if(Rx2_Buffer[0] == 0)
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
                     }
                     else
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);						
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);					
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);						
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);					
                     }
                 break;
             case 5:
                 Tx1_Buffer[0] = 0xB6;
                 if(Rx2_Buffer[0] == 0)
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
                     }
                     else
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);						
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);						
                     }
                 break;
             case 6:
                 Tx1_Buffer[0] = 0xBE;
                 if(Rx2_Buffer[0] == 0)
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
                     }
                     else
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);						
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);						
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);						
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);						
                     }
                 break;
             case 7:
                 Tx1_Buffer[0] = 0xE0;
                 if(Rx2_Buffer[0] == 0)
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
                     }
                     else
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);						
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);						
                     }
                 break;
             case 8:
                 Tx1_Buffer[0] = 0xFE;
                 if(Rx2_Buffer[0] == 0)
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
                     }
                     else
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);					
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);							
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);					
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);							
                     }
                 break;
             case 9:
                 Tx1_Buffer[0] = 0xE6;
                 if(Rx2_Buffer[0] == 0)
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
                     }
                     else
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);					
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);					
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);					
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);					
                     }
                 break;
             case 10:
                 Tx1_Buffer[0] = 0xEE;
                 if(Rx2_Buffer[0] == 0)
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
                     }
                     else
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);					
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);						
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);					
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);						
                     }
                 break;
             case 11:
                 Tx1_Buffer[0] = 0x3E;
                 if(Rx2_Buffer[0] == 0)
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
                     }
                     else
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);							
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);						
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);							
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);						
                     }
                 break;
                     case 12:
                 Tx1_Buffer[0] = 0x9C;
                 if(Rx2_Buffer[0] == 0)
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
                     }
                     else
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);						
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);								
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);						
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);								
                     }
                 break;
                     case 13:
                 Tx1_Buffer[0] = 0x7A;
                 if(Rx2_Buffer[0] == 0)
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
                     }
                     else
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);						
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);									
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);						
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);									
                     }
                 break;
                     case 14:
                             Tx1_Buffer[0] = 0x00;
-                            I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,8);
+                            I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,8);
                         break;
                     case 15:
                 Tx1_Buffer[0] = 0xFC;
                 if(Rx2_Buffer[0] == 0)
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);
                     }
                     else
                     {
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);						
-                        I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);						
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS2,Rx2_Buffer,BUFFER_SIZE2);						
+                        I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);						
                     }
                 break;
             default:

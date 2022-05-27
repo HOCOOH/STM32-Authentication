@@ -9,7 +9,7 @@ conditions (interrupts routines ...). */
 
 #define I2C_Open_LONG_TIMEOUT         ((uint32_t)0xffff)
 
-#define HAL_I2C_RW_THRESHOLD 4
+
 __IO uint32_t  I2CTimeout = I2C_Open_LONG_TIMEOUT;
 
 
