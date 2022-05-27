@@ -308,7 +308,7 @@ int main(void) {
                         goto expcetion_handler;
                     }
 								
-                if(flagInterrupt == 1) {
+                if (flagInterrupt == 1) {
                     flagInterrupt = 0;
                     I2C_Safe_Read(&hi2c1,0x71,0x01,Rx1_Buffer,1);	//读键值
                     swtich_key();	//扫描键值，写标志位
@@ -391,18 +391,16 @@ int main(void) {
             disp_in_serial(passwdRAM.hashVal);
             
             /* 比对输入摘要和真实密码摘要 */
-            if (IsPasswdValid()) {
-                printf("存储的密码损坏且无法恢复\n\r");
-                while (1) {}
+            u8 check_sum = 0;
+            for (int i = 0; i < 5; i++) {
+                SM3_Hash(pass_buf, len(pass_buf), (void*)pass_buf_sm3);
+                if (IsPasswdValid()) {
+                    printf("存储的密码损坏且无法恢复\n\r");
+                    while (1) {}
+                }
+                check_sum += cmp(pass_buf_sm3, passwdRAM.hashVal, DIGEST_LEN);
             }
-
-            u8 cmp_res1 = cmp(pass_buf_sm3, passwdRAM.hashVal, DIGEST_LEN);
-            u8 cmp_res2 = cmp(pass_buf_sm3, passwdRAM.hashVal, DIGEST_LEN);
-            u8 cmp_res = cmp_res1;
-            
-            if (cmp_res1 != cmp_res2) {
-                cmp_res = cmp(pass_buf_sm3, passwdRAM.hashVal, DIGEST_LEN);
-            }
+            u8 cmp_res = (check_sum >= 3) ? 1 : 0;
             
             if (cmp_res == 0) { // 匹配
                 // 显示success
