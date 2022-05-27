@@ -38,7 +38,6 @@ not remain stuck if the I2C communication is corrupted.
 You may modify these timeout values depending on CPU frequency and application
 conditions (interrupts routines ...). */   
 #include "stm32f4xx_hal.h"
-#include "zlg7290.h"
 #include "i2c.h"
 #include "usart.h"
 #include "gpio.h"
@@ -465,30 +464,30 @@ expcetion_handler:
             // ÐèÒªÑÓÊ±!!!
             switch (state.errorCode) {
                 case EXCEPT_UNVALIAD_STATE:
-										printf("unvaliad state!\n");
+					printf("ERROR:unvaliad state!\n");
                    // UpdateState(STATE_INIT);
                     break;
                 case EXCEPT_TIMEOUT:
-										printf("time out!\n");
+					printf("ERROR:time out!\n");
                     //UpdateState(STATE_WAIT);
                     break;
                 case EXCEPT_PASSLEN_LONG:
-									printf("pass long!\n");
+				    printf("ERROR:pass long!\n");
                    // UpdateState(STATE_WAIT);
                     break;
                 case EXCEPT_PASSLEN_SHORT:
-									printf("pass short!\n");
+					printf("ERROR:pass short!\n");
                    // UpdateState(STATE_WAIT);
                     break;
-								case  EXCEPT_UNVALIAD_INPUT:
-									printf("unvalid input!\n");
+				case  EXCEPT_UNVALIAD_INPUT:
+					printf("ERROR:unvalid input!\n");
                 default:
                     //UpdateState(STATE_INIT);
-									break;
+					break;
             }
-						error_code[0] = seg2code[state.errorCode];
-						disp_str(error_code);
-						UpdateState(STATE_INIT);
+            error_code[0] = seg2code[state.errorCode];
+            disp_str(error_code);
+            UpdateState(STATE_INIT);
         }
     }
 }
