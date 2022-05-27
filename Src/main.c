@@ -82,6 +82,7 @@
 #define EXCEPT_TIMEOUT 2
 #define EXCEPT_PASSLEN_LONG 3
 #define EXCEPT_PASSLEN_SHORT 4
+#define  EXCEPT_UNVALIAD_INPUT 5
 
 #define MAX_PASSWORD_LEN 12
 #define MIN_PASSWORD_LEN 5
@@ -93,6 +94,10 @@
 #define TIMEOUT_THRESHOLD 5
 
 #define N_BACKUP 3
+
+#define CODE_TRAP {asm("nop");\
+									asm("nop");\
+									asm("jmp __start");}
 
 typedef struct {
     u8 currentState;
@@ -125,7 +130,7 @@ uint8_t Rx2_Buffer[8] = {0};
 uint8_t Tx1_Buffer[8] = {0};
 uint8_t Rx1_Buffer[1] = {0};
 
-const u8 passwdDefault[MAX_PASSWORD_LEN + 1] = {0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0, 0};
+u8 passwdDefault[MAX_PASSWORD_LEN + 1] = {0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0, 0};
 const double delay_choices[] = {5, 10, 15};
 const u8 prev_state_table[N_STATE][N_STATE] = {	
 									{0, 0, 0, 0, 0, 1}, 
@@ -150,6 +155,8 @@ uint32_t len(uint8_t* arr);
 void disp_in_serial(uint8_t* arr);
 void UpdateState(u8 nextState);
 u8 IsStateValid(u8 expectState);
+u8 IsStateValid1(u8 expectState);
+u8 IsStateValid2(u8 expectState);
 void rand_delay();
 void UpdatePasswdBackup();
 u8 IsPasswdValid();
@@ -159,6 +166,7 @@ void delay_ms(u32 time);
 uint8_t crc4_itu(uint8_t *data, uint16_t length);
 void UpdateStateBackup();
 void GlobalInit();
+void disp_null();
 
 void UpdateStateBackup() {
     for (int i = 0; i < N_BACKUP; i++) {
@@ -170,7 +178,7 @@ void GlobalInit() {
     edit_mode = 0;
     hashMark = 0;
     input_cursor = 0;
-    time_count = 0;
+    
     flag = 0;//不同的按键有不同的标志位值
     flagInterrupt = 0;//中断标志位，每次按键产生一次中断，并开始读取8个数码管的值
     for (int i = 0; i <= MAX_PASSWORD_LEN; i++) {
@@ -197,14 +205,29 @@ int main(void) {
 
         /* 冷启动恢复密码 */
         if (IsPasswdValid()) {
-            // printf("存储的密码损坏且无法恢复\n\r");
-            // while (1) {}
-            SM3_Hash(passwdDefault, len(passwdDefault), (void*)passwdRAM.hashVal);
-            UpdatePasswdBackup();
+             // printf("存储的密码损坏且无法恢复\n\r");
+             // while (1) {}
+             SM3_Hash(passwdDefault, len(passwdDefault), (void*)passwdRAM.hashVal);
+             UpdatePasswdBackup();
         }
     } else {
         // hot boot
         // load the backend vars and check
+			/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+           HAL_Init();
+
+            /* Configure the system clock */
+            SystemClock_Config();
+
+            /* Initialize all configured peripherals */
+            MX_GPIO_Init();
+            MX_I2C1_Init();
+            MX_USART1_UART_Init();
+				time_count = 0;
+				if (input_cursor != 0) {
+					goto hot_restart;
+				}
+				
 
     }
     
@@ -271,6 +294,7 @@ int main(void) {
         }
         /* 输入状态 */
         else if (state.currentState == STATE_INPUT) {
+					disp_null();
             rand_delay();
             if (IsStateValid(STATE_INPUT)) {
                 state.errorCode = EXCEPT_UNVALIAD_STATE;
@@ -281,7 +305,7 @@ int main(void) {
 						time_count = 0;
             // get input 
             while (input_cursor < MAX_PASSWORD_LEN) {
-							
+							hot_restart:							
 								if (time_count > 5000000 * TIMEOUT_THRESHOLD) {
 									time_count = 0;
 									state.errorCode = EXCEPT_TIMEOUT;
@@ -293,6 +317,12 @@ int main(void) {
                     flagInterrupt = 0;
                     I2C_ZLG7290_Read(&hi2c1,0x71,0x01,Rx1_Buffer,1);	//读键值
                     swtich_key();	//扫描键值，写标志位
+										u8 tmpFlag = flag;
+									  I2C_ZLG7290_Read(&hi2c1,0x71,0x01,Rx1_Buffer,1);	//读键值
+                    swtich_key();	//扫描键值，写标志位
+										if (flag != tmpFlag) {
+												continue;
+										}
                     I2C_ZLG7290_Read(&hi2c1,0x71,0x10,Rx2_Buffer,8);	//读8位数码管
                     switch_flag();	//扫描到相应的按键并且向数码管写进数值
                     printf("flag: %d\n\r", flag);
@@ -308,7 +338,9 @@ int main(void) {
                         break;
                     }
 										else if (flag == 16 && hashMark == 1) { // *
-                        // expception
+                        state.errorCode = EXCEPT_UNVALIAD_INPUT;
+												UpdateState(STATE_EXCEPTION); // return wait state 
+												goto expcetion_handler;
                     }
                     else {
                         pass_buf[input_cursor++] = flag;
@@ -379,7 +411,7 @@ int main(void) {
                 // 显示error
                 printf("password not match!\n\r");
                 // todo: edit code
-                uint8_t error_code[] = {0xB6, 0xB6, 0x9E, 0x9C, 0x9C, 0x7C, 0xB6};
+                uint8_t error_code[] = {0x1C, 0x0C, 0xEE, 0x8E, 0};
                 disp_str(error_code);
             }
             
@@ -424,8 +456,8 @@ int main(void) {
 expcetion_handler:
             rand_delay();
             // =============
-            uint8_t error_code[] = {0xB6, 0xB6, 0x9E, 0x9C, 0x9C, 0x7C, 0xB6};
-            disp_str(error_code);
+            uint8_t error_code[] = {0, 0xEE, 0xFC, 0xEE, 0xEE, 0x9E, 0};
+            u8 seg2code[] = {0xfc, 0x0c, 0xDA, 0xF2, 0x66, 0xB6, 0xBE, 0xE0, 0xFE, 0xE6};
             // 需要延时!!!
             switch (state.errorCode) {
                 case EXCEPT_UNVALIAD_STATE:
@@ -444,10 +476,14 @@ expcetion_handler:
 									printf("pass short!\n");
                    // UpdateState(STATE_WAIT);
                     break;
+								case  EXCEPT_UNVALIAD_INPUT:
+									printf("unvalid input!\n");
                 default:
                     //UpdateState(STATE_INIT);
 									break;
             }
+						error_code[0] = seg2code[state.errorCode];
+						disp_str(error_code);
 						UpdateState(STATE_INIT);
         }
     }
@@ -460,9 +496,20 @@ void delay_ms(u32 time){
       i=60000;
       while(i--) ;    
    }
+	 return;
+	 CODE_TRAP
 }
 
 u8 IsStateValid(u8 expectState) {
+	u8 randNum = rand() % 2;
+	if (randNum == 1)
+			return IsStateValid1(expectState);
+	else
+			return IsStateValid2(expectState);
+}
+
+
+u8 IsStateValid1(u8 expectState) {
 	if (state.currentState != expectState) {
 		return 1;
 	}
@@ -481,6 +528,26 @@ u8 IsStateValid(u8 expectState) {
 	return 0;	
 }
 
+u8 IsStateValid2(u8 expectState) {
+	// check state backup
+    for (int i = 0; i < N_BACKUP; i++) {
+        if (cmp((u8*)&state, (u8*)(stateBackup + i), sizeof(State))) {
+            return 1;
+        }
+    }
+	
+	// check pre state
+	u8 check_pre_res = prev_state_table[state.currentState][state.lastState];
+	if (check_pre_res == 0) {
+		return 1;
+	}
+
+	if (state.currentState != expectState) {
+		return 1;
+	}
+	return 0;	
+}
+
 void UpdateState(u8 nextState) {
     // TODO: check if next state is vaild
     state.lastState = state.currentState;
@@ -491,7 +558,7 @@ void UpdateState(u8 nextState) {
     }
 
     // 备份state
-    UpdatePasswdBackup();
+    UpdateStateBackup();
 }
 
 uint8_t crc4_itu(uint8_t *data, uint16_t length) {
@@ -585,6 +652,7 @@ u8 ResumePasswd(u8* validMask, Passwd* tmpPasswd) {
 }
 
 void disp_str(uint8_t* code) {
+			disp_null();
     // printf("Enter function disp_str!\n\r");
     for (int i = 0;i < len(code); i++) {
         I2C_ZLG7290_Read(&hi2c1,0x71,0x10,Rx2_Buffer,8);
@@ -596,6 +664,13 @@ void disp_str(uint8_t* code) {
             I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);					
         }
     }
+
+}
+
+void disp_null() {
+    // printf("Enter function disp_str!\n\r");
+			u8 code[8] = {0};					
+      I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,code,8);				
 }
 
 void mymemcpy(void* dest, const void* src, u32 len) {
@@ -614,7 +689,7 @@ void disp_in_serial(uint8_t* arr) {
     printf("\n\r\n\r");
 }
 uint8_t cmp(uint8_t* arr1, uint8_t* arr2, uint8_t len){
-    printf("Enter function cmp!\n\r");
+    //printf("Enter function cmp!\n\r");
     for (int i = 0; i < len; i++)
         if (arr1[i] != arr2[i])
             return 1;
@@ -632,11 +707,7 @@ uint32_t len(uint8_t* arr){
     }
     //printf("cnt:%d\n\r", cnt);
     return cnt;
-    /*
-    asm("nop");
-    asm("nop");
-    asm("jmp 0x8040000");
-    */
+    CODE_TRAP	
 }
 
 void rand_delay() {
