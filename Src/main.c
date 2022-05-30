@@ -66,7 +66,7 @@ conditions (interrupts routines ...). */
 #define countof(a) (sizeof(a) / sizeof(*(a)))
 
 #define FLASH_ADDR_BASE 0x08080000
-#define ALIGN_PASSWD_BACKUP 0x100
+#define ALIGN_PASSWD_BACKUP 0x20000 // 设置成扇区大小
 #define ADDR_PASSWD_BACKUP(i) (FLASH_ADDR_BASE + ((i) * ALIGN_PASSWD_BACKUP))
 
 /*
@@ -98,7 +98,7 @@ conditions (interrupts routines ...). */
 
 #define REFRESH_COUNT_INIT 500
 #define HOT_BOOT_FLAG 0x1234ABCD
-#define TIMEOUT_THRESHOLD 5
+#define TIMEOUT_THRESHOLD 8
 
 
 #define HAL_I2C_RW_THRESHOLD 4
@@ -112,16 +112,19 @@ conditions (interrupts routines ...). */
 
 #define DEALY_LIMIT 500
 
+// 校验码
 typedef struct {
     u8 currentState;
     u8 lastState;
     u8 errorCode;
+		u8 CRCVal;
 } State;
 
 typedef struct {
     u8 hashVal[DIGEST_LEN + 1];
     u8 CRCVal;
-    u8 align[2];
+		u8 version;
+    u8 align;
 } Passwd;
 
 u32 boot_flag __attribute__((at(0x10000000)));
@@ -194,13 +197,24 @@ void delay_ms(u32 time);
 void mymemcpy(void* dest, const void* src, u32 len);
 uint8_t cmp(uint8_t* arr1, uint8_t* arr2, uint8_t len);
 uint32_t len(uint8_t* arr);
+void HardwareInit();
+void HardwareInit() {
+	HAL_Init();
 
+	/* Configure the system clock */
+	SystemClock_Config();
+
+	/* Initialize all configured peripherals */
+	MX_GPIO_Init();
+	MX_I2C1_Init();
+	MX_USART1_UART_Init();
+}
 int main(void) {
     if (boot_flag != HOT_BOOT_FLAG) {
+				//========================Modify1=========================
         // cold boot
-		boot_flag = HOT_BOOT_FLAG;
-        // init
-        GlobalInit();
+        GlobalInit(); // init var
+			//MX_IWDG_Init();
 
         /* 冷启动恢复密码 */
         if (IsPasswdValid()) {
@@ -209,25 +223,17 @@ int main(void) {
              SM3_Hash(passwdDefault, len(passwdDefault), (void*)passwdRAM.hashVal);
              UpdatePasswdBackup();
         }
+				boot_flag = HOT_BOOT_FLAG;
     } else {
         // hot boot
         // load the backend vars and check
 			/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-        HAL_Init();
-
-        /* Configure the system clock */
-        SystemClock_Config();
-
-        /* Initialize all configured peripherals */
-        MX_GPIO_Init();
-        MX_I2C1_Init();
-        MX_USART1_UART_Init();
-        // watch dog
-        MX_IWDG_Init();
+        HardwareInit();
         time_count = 0;
         if (input_cursor != 0) {
             goto hot_restart;
         }
+				printf("hot boot");
     }
     
     // printf("\n\r");
@@ -246,34 +252,28 @@ int main(void) {
     while (1) {
         /* 初始化状态 */
         if (state.currentState == STATE_INIT) {
+					//========================Modify2=========================
+            // useless!!!!!!!rand_delay();
+
             /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-            HAL_Init();
-
-            /* Configure the system clock */
-            SystemClock_Config();
-
-            /* Initialize all configured peripherals */
-            MX_GPIO_Init();
-            MX_I2C1_Init();
-            MX_USART1_UART_Init();
-            //MX_CRC_Init();
-
+						HardwareInit();
             /* Initialize variables */
            // refreshCount = REFRESH_COUNT_INIT;
             input_cursor = 0;
-			edit_mode = 0;
+						edit_mode = 0;
             for (int i = 0; i < MAX_PASSWORD_LEN; i++) {
                 pass_buf[i] = 0;
             }
-
-            rand_delay();
-
+						
             // switch to state wait
             UpdateState(STATE_WAIT);
         }
         /* 待机状态 */
         else if (state.currentState == STATE_WAIT) {
-            rand_delay();
+						//IWDG_Feed();
+						//========================Modify3=========================
+            // useless!!!!!!!rand_delay();
+
             if (IsStateValid(STATE_WAIT)) {
                 state.errorCode = EXCEPT_UNVALIAD_STATE;
                 UpdateState(STATE_EXCEPTION);
@@ -293,7 +293,8 @@ int main(void) {
         }
         /* 输入状态 */
         else if (state.currentState == STATE_INPUT) {
-					disp_null();
+					//IWDG_Feed();
+						disp_null();
             rand_delay();
             if (IsStateValid(STATE_INPUT)) {
                 state.errorCode = EXCEPT_UNVALIAD_STATE;
@@ -304,8 +305,8 @@ int main(void) {
 						time_count = 0;
             // get input 
             while (input_cursor < MAX_PASSWORD_LEN) {
-                // 看门狗???
-                
+                // 看门狗
+                //IWDG_Feed();
                 hot_restart:							
                     if (time_count > 5000000 * TIMEOUT_THRESHOLD) {
                         time_count = 0;
@@ -315,12 +316,14 @@ int main(void) {
                     }
 								
                 if (flagInterrupt == 1) {
+										//IWDG_Feed();
                     // 重复读取键值输入
+									// switch flag之前进行检查
                     flagInterrupt = 0;
                     I2C_Safe_Read(&hi2c1,0x71,0x01,Rx1_Buffer,1);	//读键值
                     swtich_key();	//扫描键值，写标志位
-					u8 tmpFlag = flag;
-					I2C_Safe_Read(&hi2c1,0x71,0x01,Rx1_Buffer,1);	//读键值
+										u8 tmpFlag = flag;
+										I2C_Safe_Read(&hi2c1,0x71,0x01,Rx1_Buffer,1);	//读键值
                     swtich_key();	//扫描键值，写标志位
                     if (flag != tmpFlag) {
                             continue;
@@ -356,13 +359,19 @@ int main(void) {
                     else {
                         pass_buf[input_cursor++] = flag;
                     }
-					time_count = 0;
+									time_count = 0;
                  // todo: 异常!!!:无效的字?
+								} else {
+									if (time_count % 100 == 99) {
+										HardwareInit();
+									}
+								}
+								//=======================Modify4==================
+								// !!!!!!!!!刷新问题
+						time_count++;
 				}
-				time_count++;
-			}
             
-			pass_buf[input_cursor] = 0;
+						pass_buf[input_cursor] = 0;
             // 异常: 密码长度过长
             if (input_cursor >= MAX_PASSWORD_LEN) {
                 printf("Password is too long\n\r");
@@ -390,6 +399,7 @@ int main(void) {
         }
         /* 判断密码状态 */
         else if (state.currentState == STATE_CHECK) {
+						//IWDG_Feed();
             rand_delay();
             if (IsStateValid(STATE_CHECK)) {
                 state.errorCode = EXCEPT_UNVALIAD_STATE;
@@ -423,6 +433,7 @@ int main(void) {
                 printf("password match!\n\r");
                 uint8_t success_code[] = {0xB6, 0xB6, 0x9E, 0x9C, 0x9C, 0x7C, 0xB6};
                 disp_str(success_code);
+								edit_mode = hashMark;
             
             } else { // 不匹配
                 // 显示error
@@ -430,14 +441,16 @@ int main(void) {
                 // todo: edit code
                 uint8_t error_code[] = {0x1C, 0x0C, 0xEE, 0x8E, 0};
                 disp_str(error_code);
+								edit_mode = 0;
             }
             
             /* 返回待机状态 */
-            edit_mode = hashMark;
+            // edit_mode = hashMark;
             UpdateState(STATE_WAIT);
         }
         /* 修改密码状态 */
         else if (state.currentState == STATE_EDIT) {
+						//IWDG_Feed();
             rand_delay();
             if (IsStateValid(STATE_EDIT)) {
                 state.errorCode = EXCEPT_UNVALIAD_STATE;
@@ -471,6 +484,7 @@ int main(void) {
         /* 异常状态 */
         else {	// default 异常
 expcetion_handler:
+						//IWDG_Feed();
             rand_delay();
             // =============
             uint8_t error_code[] = {0, 0xEE, 0xFC, 0xEE, 0xEE, 0x9E, 0};
@@ -616,7 +630,7 @@ uint8_t crc4_itu(uint8_t *data, uint16_t length) {
     }
     return crc;
 }
-
+//=======================Modify5======================
 void UpdatePasswdBackup() {
     passwdRAM.CRCVal = crc4_itu(passwdRAM.hashVal, DIGEST_LEN);
 	// passwdCRC = HAL_CRC_Calculate(&hcrc, (u32*)pass_store_sm3, DIGEST_LEN / 4);
@@ -626,6 +640,7 @@ void UpdatePasswdBackup() {
 }
 
 u8 IsPasswdValid() {
+		
     u8 flag = 0;
     u8 validMask[N_BACKUP + 1] = {0};
     /* 首先校验密码备份 */
@@ -737,14 +752,17 @@ void disp_str(uint8_t* code) {
             I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);					
         }
     }
+		for (int  i =0;i < 8; i++)
+			Rx2_Buffer[i] = 0;
     return;
     CODE_TRAP	
 }
 
 void disp_null() {
     // printf("Enter function disp_str!\n\r");
-	u8 code[8] = {0};					
+		u8 code[8] = {0};					
     I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,code,8);	
+		//I2C_ZLG7290_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,code,8);
     return;
     CODE_TRAP				
 }
