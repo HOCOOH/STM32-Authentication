@@ -112,18 +112,20 @@ conditions (interrupts routines ...). */
 
 #define DEALY_LIMIT 500
 
+#define STATE_LEN 3
+
 // 校验码
 typedef struct {
     u8 currentState;
     u8 lastState;
     u8 errorCode;
-		u8 CRCVal;
+	u8 CRCVal;
 } State;
 
 typedef struct {
     u8 hashVal[DIGEST_LEN + 1];
     u8 CRCVal;
-		u8 version;
+	u8 version;
     u8 align;
 } Passwd;
 
@@ -178,7 +180,7 @@ void UpdateStateBackup();
 // 密码相关函数
 void UpdatePasswdBackup();
 u8 IsPasswdValid();
-u8 ResumePasswd(u8* validMask, Passwd* tmpPasswd);
+u8 ResumePasswd();
 uint8_t crc4_itu(uint8_t *data, uint16_t length);
 
 // 输入输出相关
@@ -220,8 +222,9 @@ int main(void) {
         if (IsPasswdValid()) {
              // printf("存储的密码损坏且无法恢复\n\r");
              // while (1) {}
-             SM3_Hash(passwdDefault, len(passwdDefault), (void*)passwdRAM.hashVal);
-             UpdatePasswdBackup();
+            SM3_Hash(passwdDefault, len(passwdDefault), (void*)passwdRAM.hashVal);
+            passwdRAM.version = 1;
+            UpdatePasswdBackup();
         }
 				boot_flag = HOT_BOOT_FLAG;
     } else {
@@ -469,6 +472,7 @@ int main(void) {
                 pass_buf[i] = 0;
             }
             SM3_Hash(pass_buf, len(pass_buf), (void*)passwdRAM.hashVal);
+            passwdRAM.version += 1;
             UpdatePasswdBackup();
 
             // 显示update
@@ -543,15 +547,13 @@ void GlobalInit() {
     state.currentState = STATE_INIT;
     state.lastState = STATE_EXCEPTION;
     state.errorCode = 0;
-    UpdateStateBackup();
+    // UpdateStateBackup();
 }
 void UpdateStateBackup() {
     for (int i = 0; i < N_BACKUP; i++) {
         mymemcpy((void*)(stateBackup + i), (void*)&state, sizeof(State));
     }
 }
-
-
 
 u8 IsStateValid(u8 expectState) {
 	u8 randNum = rand() % 2;
@@ -560,7 +562,6 @@ u8 IsStateValid(u8 expectState) {
 	else
 			return IsStateValid2(expectState);
 }
-
 
 u8 IsStateValid1(u8 expectState) {
 	if (state.currentState != expectState) {
@@ -571,22 +572,20 @@ u8 IsStateValid1(u8 expectState) {
 	if (check_pre_res == 0) {
 		return 1;
 	}
-    // check state backup
-    for (int i = 0; i < N_BACKUP; i++) {
-        if (cmp((u8*)&state, (u8*)(stateBackup + i), sizeof(State))) {
-            return 1;
-        }
+    // check state CRC
+    u8 tmpCRC = crc4_itu((u8*)&state, STATE_LEN);
+    if (tmpCRC != state.CRCVal) {
+        return 1;
     }
 
 	return 0;	
 }
 
 u8 IsStateValid2(u8 expectState) {
-	// check state backup
-    for (int i = 0; i < N_BACKUP; i++) {
-        if (cmp((u8*)&state, (u8*)(stateBackup + i), sizeof(State))) {
-            return 1;
-        }
+    // check state CRC
+    u8 tmpCRC = crc4_itu((u8*)&state, STATE_LEN);
+    if (tmpCRC != state.CRCVal) {
+        return 1;
     }
 	
 	// check pre state
@@ -610,8 +609,11 @@ void UpdateState(u8 nextState) {
         state.errorCode = 0;
     }
 
+    // 计算CRC校验
+    state.CRCVal = crc4_itu((u8*)&state, STATE_LEN);
+
     // 备份state
-    UpdateStateBackup();
+    // UpdateStateBackup();
 }
 
 uint8_t crc4_itu(uint8_t *data, uint16_t length) {
@@ -640,67 +642,55 @@ void UpdatePasswdBackup() {
 }
 
 u8 IsPasswdValid() {
-		
     u8 flag = 0;
+	u32 tmpCRC = crc4_itu(passwdRAM.hashVal, DIGEST_LEN);
+    /* 检查密码哈希 */
+    if (tmpCRC != passwdRAM.CRCVal) {
+        flag = 1;
+        // return 1;
+    }
+    /* 若密码失效，尝试恢复 */
+    else {
+        flag = ResumePasswd();
+        // validMask[N_BACKUP] = 1;
+        // tmpPasswd[N_BACKUP].CRCVal = tmpCRC;
+        // mymemcpy((void*)tmpPasswd[N_BACKUP].hashVal, (void*)passwdRAM.hashVal, DIGEST_LEN);
+        // for (int i = 0; i < N_BACKUP; i++) {
+        //     if (validMask[i] && tmpPasswd[i].CRCVal != passwdRAM.CRCVal) {
+        //         flag = 1;
+        //     }
+        // }
+    }
+
+
+    return flag;
+}
+
+u8 ResumePasswd() {
     u8 validMask[N_BACKUP + 1] = {0};
     /* 首先校验密码备份 */
     u32 tmpCRC = 0;
+    u8 maxVal = 0;
+    int maxIndex = -1;
     Passwd tmpPasswd[N_BACKUP + 1] = {0};
     for (int i = 0; i < N_BACKUP; i++) {
         STMFLASH_Read(ADDR_PASSWD_BACKUP(i), (u32*)(tmpPasswd + i), PASSWD_LEN_U32);
 		tmpCRC = crc4_itu(tmpPasswd[i].hashVal, DIGEST_LEN);;
         if (tmpCRC == tmpPasswd[i].CRCVal) {
-            validMask[i] = 1;
-        }
-    }
-	tmpCRC = crc4_itu(passwdRAM.hashVal, DIGEST_LEN);;
-    /* 检查密码哈希 */
-    if (tmpCRC != passwdRAM.CRCVal) {
-        flag = 1;
-    }
-    else {
-        validMask[N_BACKUP] = 1;
-        tmpPasswd[N_BACKUP].CRCVal = tmpCRC;
-        mymemcpy((void*)tmpPasswd[N_BACKUP].hashVal, (void*)passwdRAM.hashVal, DIGEST_LEN);
-        for (int i = 0; i < N_BACKUP; i++) {
-            if (validMask[i] && tmpPasswd[i].CRCVal != passwdRAM.CRCVal) {
-                flag = 1;
+            // 找到版本最新的密码
+            if (maxVal < tmpPasswd[i].version) {
+                maxVal = tmpPasswd[i].version;
+                maxIndex = i;
             }
         }
     }
-
-    /* 若密码失效，尝试恢复 */
-    if (flag) {
-        flag = ResumePasswd(validMask, tmpPasswd);
-    }
-
-    return flag;
-}
-
-u8 ResumePasswd(u8* validMask, Passwd* tmpPasswd) {
-    u8 validCnt[N_BACKUP + 1] = {0};
-    for (int i = 0; i <= N_BACKUP; i++) {
-        for (int j = 0; j <= N_BACKUP; j++) {
-            if (validMask[i] && validMask[j] && tmpPasswd[i].CRCVal == tmpPasswd[j].CRCVal) {
-                validCnt[i]++;
-            }
-        }
-    }
-    
-    /* 找到匹配数最多的密码 */
-    u8 maxVal = 0, maxInex = 0;
-    for (int i = 0; i <= N_BACKUP; i++) {
-        if (maxVal < validCnt[i]) {
-            maxVal = validCnt[i];
-            maxInex = i;
-        }
-    }
-    /* 没有两个相同的密码备份，炸了 */
-    if (maxVal < 2) {
+    /* 没有可用的密码备份，炸了 */
+    if (maxVal < 0) {
         return 1;
     }
     /* 恢复密码 */
-    mymemcpy((void*)passwdRAM.hashVal, (void*)tmpPasswd[maxInex].hashVal, DIGEST_LEN);
+    mymemcpy((void*)passwdRAM.hashVal, (void*)tmpPasswd[maxIndex].hashVal, DIGEST_LEN);
+    passwdRAM.version = maxVal;
     UpdatePasswdBackup();
     return 0;
 }
