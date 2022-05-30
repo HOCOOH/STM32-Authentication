@@ -45,6 +45,7 @@ conditions (interrupts routines ...). */
 #include "SM3.h"
 #include "stdlib.h"
 #include "flash.h"
+#include "iwdg.h"
 
 /* USER CODE BEGIN Includes */
 #include "zlg7290.h"
@@ -221,6 +222,8 @@ int main(void) {
         MX_GPIO_Init();
         MX_I2C1_Init();
         MX_USART1_UART_Init();
+        // watch dog
+        MX_IWDG_Init();
         time_count = 0;
         if (input_cursor != 0) {
             goto hot_restart;
@@ -301,6 +304,8 @@ int main(void) {
 						time_count = 0;
             // get input 
             while (input_cursor < MAX_PASSWORD_LEN) {
+                // ¿´ÃÅ¹·???
+                
                 hot_restart:							
                     if (time_count > 5000000 * TIMEOUT_THRESHOLD) {
                         time_count = 0;
