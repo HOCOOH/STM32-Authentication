@@ -152,7 +152,7 @@ const u8 prev_state_table[N_STATE][N_STATE] = {
 									{0, 0, 1, 0, 0, 0},
 									{1, 1, 1, 1, 1, 0} }; // exception´ýÌí¼Ó
 
-__IO uint32_t  I2CTimeout = I2C_Open_LONG_TIMEOUT;
+//__IO uint32_t  I2CTimeout = I2C_Open_LONG_TIMEOUT;
 
 /* USER CODE END PV */
 

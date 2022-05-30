@@ -24,15 +24,7 @@ __IO uint32_t  I2CTimeout = I2C_Open_LONG_TIMEOUT;
 
 void I2C_ZLG7290_Read(I2C_HandleTypeDef *I2Cx,uint8_t I2C_Addr,uint8_t addr,uint8_t *buf,uint8_t num)
 {
-	uint8_t memread_cnt = 0;
-    while(HAL_I2C_Mem_Read (I2Cx ,I2C_Addr,addr,I2C_MEMADD_SIZE_8BIT,buf,num,I2CTimeout) != HAL_OK ) {
-		memread_cnt++;
-		if (memread_cnt > HAL_I2C_RW_THRESHOLD) {
-			MX_I2C1_Init();
-			memread_cnt = 0;
-		}
-	}
-}
+    while(HAL_I2C_Mem_Read (I2Cx ,I2C_Addr,addr,I2C_MEMADD_SIZE_8BIT,buf,num,I2CTimeout) != HAL_OK );
 
 /*******************************************************************************
 * Function Name  : I2C_24C64_WriteOneByte
@@ -45,14 +37,7 @@ void I2C_ZLG7290_Read(I2C_HandleTypeDef *I2Cx,uint8_t I2C_Addr,uint8_t addr,uint
 
 void I2C_ZLG7290_WriteOneByte(I2C_HandleTypeDef *I2Cx,uint8_t I2C_Addr,uint8_t addr,uint8_t value)
 {   
-	uint8_t memwrite_cnt = 0;
-	while( HAL_I2C_Mem_Write(I2Cx, I2C_Addr, addr, I2C_MEMADD_SIZE_8BIT, &value, 0x01, I2CTimeout) != HAL_OK ) {
-		memwrite_cnt++;
-		if (memwrite_cnt > HAL_I2C_RW_THRESHOLD) {
-			MX_I2C1_Init();
-			memwrite_cnt = 0;
-		}
-	}
+	while( HAL_I2C_Mem_Write(I2Cx, I2C_Addr, addr, I2C_MEMADD_SIZE_8BIT, &value, 0x01, I2CTimeout) != HAL_OK );
 }
 
 /*******************************************************************************
