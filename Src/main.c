@@ -219,13 +219,14 @@ int main(void) {
 			//MX_IWDG_Init();
 
         /* 冷启动恢复密码 */
-        if (IsPasswdValid()) {
+        //if (IsPasswdValid()) {
              // printf("存储的密码损坏且无法恢复\n\r");
              // while (1) {}
-            SM3_Hash(passwdDefault, len(passwdDefault), (void*)passwdRAM.hashVal);
-            passwdRAM.version = 1;
-            UpdatePasswdBackup();
-        }
+            //SM3_Hash(passwdDefault, len(passwdDefault), (void*)passwdRAM.hashVal);
+            //passwdRAM.version = 1;
+            //UpdatePasswdBackup();
+        //}
+				ResumePasswd();
 				boot_flag = HOT_BOOT_FLAG;
     } else {
         // hot boot
@@ -311,7 +312,7 @@ int main(void) {
                 // 看门狗
                 //IWDG_Feed();
                 hot_restart:							
-                    if (time_count > 5000000 * TIMEOUT_THRESHOLD) {
+                    if (time_count > 100000 * TIMEOUT_THRESHOLD) {
                         time_count = 0;
                         state.errorCode = EXCEPT_TIMEOUT;
                         UpdateState(STATE_EXCEPTION); // return wait state 
@@ -322,7 +323,7 @@ int main(void) {
 					//IWDG_Feed();
                     // 重复读取键值输入
 					// switch flag之前进行检查
-                    //=======================Modify=========================
+                    //=======================Modify3=========================
                     flagInterrupt = 0;
                     I2C_Safe_Read(&hi2c1,0x71,0x01,Rx1_Buffer,1);	//读键值
                     u8 first_key = Rx1_Buffer[0];
@@ -367,8 +368,10 @@ int main(void) {
 									time_count = 0;
                  // todo: 异常!!!:无效的字?
 								} else {
-									if (time_count % 100 == 99) {
+									if (time_count % 10000 == 9999) {
+										// printf("\n\r%lld\n\r", time_count);
 										HardwareInit();
+										I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Rx2_Buffer,BUFFER_SIZE2);
 									}
 								}
 								//=======================Modify4==================
@@ -549,12 +552,34 @@ void GlobalInit() {
     state.currentState = STATE_INIT;
     state.lastState = STATE_EXCEPTION;
     state.errorCode = 0;
-    // UpdateStateBackup();
+		state.CRCVal = crc4_itu((u8*)&state, STATE_LEN);
+    UpdateStateBackup();
 }
 void UpdateStateBackup() {
     for (int i = 0; i < N_BACKUP; i++) {
         mymemcpy((void*)(stateBackup + i), (void*)&state, sizeof(State));
     }
+}
+
+u8 ResumeState() {
+		u8 validMask[N_BACKUP + 1] = {0};
+    /* 首先校验备份 */
+    u32 tmpCRC = 0;
+		int i = 0;
+    for ( ; i < N_BACKUP; i++) {
+				tmpCRC = crc4_itu((u8*)(stateBackup + i), STATE_LEN);
+        if (tmpCRC == stateBackup[i].CRCVal) {
+            break;
+        }
+    }
+    /* 没有可用的秒备份，炸了 */
+    if (i >= N_BACKUP) {
+        return 1;
+    }
+    /* 恢复 */
+    mymemcpy((void*)&state, (void*)(stateBackup + i), sizeof(State));
+    UpdateStateBackup();
+    return 0;
 }
 
 u8 IsStateValid(u8 expectState) {
@@ -577,7 +602,7 @@ u8 IsStateValid1(u8 expectState) {
     // check state CRC
     u8 tmpCRC = crc4_itu((u8*)&state, STATE_LEN);
     if (tmpCRC != state.CRCVal) {
-        return 1;
+        return ResumeState();
     }
 
 	return 0;	
@@ -587,7 +612,7 @@ u8 IsStateValid2(u8 expectState) {
     // check state CRC
     u8 tmpCRC = crc4_itu((u8*)&state, STATE_LEN);
     if (tmpCRC != state.CRCVal) {
-        return 1;
+        ResumeState();
     }
 	
 	// check pre state
@@ -615,7 +640,7 @@ void UpdateState(u8 nextState) {
     state.CRCVal = crc4_itu((u8*)&state, STATE_LEN);
 
     // 备份state
-    // UpdateStateBackup();
+    UpdateStateBackup();
 }
 
 uint8_t crc4_itu(uint8_t *data, uint16_t length) {
@@ -647,9 +672,9 @@ u8 IsPasswdValid() {
     u8 flag = 0;
 	u32 tmpCRC = crc4_itu(passwdRAM.hashVal, DIGEST_LEN);
     /* 检查密码哈希 */
-    if (tmpCRC != passwdRAM.CRCVal) {
-        flag = 1;
-        // return 1;
+    if (tmpCRC == passwdRAM.CRCVal) {
+        //flag = 0;
+        return 0;
     }
     /* 若密码失效，尝试恢复 */
     else {
@@ -664,7 +689,6 @@ u8 IsPasswdValid() {
         // }
     }
 
-
     return flag;
 }
 
@@ -672,12 +696,12 @@ u8 ResumePasswd() {
     u8 validMask[N_BACKUP + 1] = {0};
     /* 首先校验密码备份 */
     u32 tmpCRC = 0;
-    u8 maxVal = 0;
+    int maxVal = -1;
     int maxIndex = -1;
     Passwd tmpPasswd[N_BACKUP + 1] = {0};
     for (int i = 0; i < N_BACKUP; i++) {
         STMFLASH_Read(ADDR_PASSWD_BACKUP(i), (u32*)(tmpPasswd + i), PASSWD_LEN_U32);
-		tmpCRC = crc4_itu(tmpPasswd[i].hashVal, DIGEST_LEN);;
+				tmpCRC = crc4_itu(tmpPasswd[i].hashVal, DIGEST_LEN);;
         if (tmpCRC == tmpPasswd[i].CRCVal) {
             // 找到版本最新的密码
             if (maxVal < tmpPasswd[i].version) {
@@ -687,7 +711,7 @@ u8 ResumePasswd() {
         }
     }
     /* 没有可用的密码备份，炸了 */
-    if (maxVal < 0) {
+    if (maxIndex < 0) {
         return 1;
     }
     /* 恢复密码 */
