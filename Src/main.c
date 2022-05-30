@@ -107,7 +107,7 @@ conditions (interrupts routines ...). */
 
 #define CODE_TRAP { asm("nop");\
 				    asm("nop");\
-					asm("jmp __start");}
+					asm("jmp main");}
 
 #define DEALY_LIMIT 500
 
@@ -138,7 +138,8 @@ uint8_t input_cursor __attribute__((at(0x10001100))) = 0;
 u8 hashMark __attribute__((at(0x10001200))) = 0;
 Passwd passwdRAM __attribute__((at(0x10000F00))) = {0};
 
-uint8_t Rx2_Buffer[8] = {0};
+
+uint8_t Rx2_Buffer[8] __attribute__((at(0x10007000))) = {0};
 uint8_t Tx1_Buffer[8] = {0};
 uint8_t Rx1_Buffer[1] = {0};
 
@@ -309,6 +310,7 @@ int main(void) {
                     }
 								
                 if (flagInterrupt == 1) {
+                    // 重复读取键值输入
                     flagInterrupt = 0;
                     I2C_Safe_Read(&hi2c1,0x71,0x01,Rx1_Buffer,1);	//读键值
                     swtich_key();	//扫描键值，写标志位
@@ -318,9 +320,18 @@ int main(void) {
                     if (flag != tmpFlag) {
                             continue;
                     }
-                    I2C_Safe_Read(&hi2c1,0x71,0x10,Rx2_Buffer,8);	//读8位数码管
-                    switch_flag();	//扫描到相应的按键并且向数码管写进数值
+
                     printf("flag: %d\n\r", flag);
+
+                    //I2C_Safe_Read(&hi2c1,0x71,0x10,Rx2_Buffer,8);	//读8位数码管
+                    switch_flag();	//扫描到相应的按键并且向数码管写进数值
+                    // 更新数码管
+                    // Rx2_Buffer 右移一位
+                    for (int i = 7; i >= 0; i--) {
+                        Rx2_Buffer[i] = Rx2_Buffer[i-1];
+                    }
+                    // 填入新flag对应的数码管表示
+                    Rx2_Buffer[0] = Tx1_Buffer[0];
 
                     if (flag == 14) {// #
                         printf("Password input done!\n\r");
@@ -503,7 +514,11 @@ void GlobalInit() {
     for (int i = 0; i <= DIGEST_LEN; i++) {
         pass_buf_sm3[i] = 0;
     }
+    for (int i = 0; i <= 8; i++) {
+        Rx2_Buffer[i] = 0;
+    }
     passwdRAM = (Passwd){0};
+
 
     // reset state
     state.currentState = STATE_INIT;
