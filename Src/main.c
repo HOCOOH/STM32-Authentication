@@ -316,19 +316,21 @@ int main(void) {
                     }
 								
                 if (flagInterrupt == 1) {
-										//IWDG_Feed();
+					//IWDG_Feed();
                     // 重复读取键值输入
-									// switch flag之前进行检查
+					// switch flag之前进行检查
+                    //=======================Modify=========================
                     flagInterrupt = 0;
                     I2C_Safe_Read(&hi2c1,0x71,0x01,Rx1_Buffer,1);	//读键值
-                    swtich_key();	//扫描键值，写标志位
-										u8 tmpFlag = flag;
-										I2C_Safe_Read(&hi2c1,0x71,0x01,Rx1_Buffer,1);	//读键值
-                    swtich_key();	//扫描键值，写标志位
-                    if (flag != tmpFlag) {
+                    u8 first_key = Rx1_Buffer[0];
+					I2C_Safe_Read(&hi2c1,0x71,0x01,Rx1_Buffer,1);	//读键值
+                    u8 second_key = Rx1_Buffer[0];
+
+                    if (first_key != second_key) {
                             continue;
                     }
 
+                    swtich_key();	//扫描键值，写标志位
                     printf("flag: %d\n\r", flag);
 
                     //I2C_Safe_Read(&hi2c1,0x71,0x10,Rx2_Buffer,8);	//读8位数码管
@@ -755,7 +757,7 @@ void disp_str(uint8_t* code) {
 		for (int  i =0;i < 8; i++)
 			Rx2_Buffer[i] = 0;
     return;
-    CODE_TRAP	
+    CODE_TRAP
 }
 
 void disp_null() {
