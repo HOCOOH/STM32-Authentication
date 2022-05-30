@@ -732,13 +732,16 @@ void disp_str(uint8_t* code) {
             I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,Tx1_Buffer,1);					
         }
     }
-
+    return;
+    CODE_TRAP	
 }
 
 void disp_null() {
     // printf("Enter function disp_str!\n\r");
 	u8 code[8] = {0};					
-    I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,code,8);				
+    I2C_Safe_Write(&hi2c1,0x70,ZLG_WRITE_ADDRESS1,code,8);	
+    return;
+    CODE_TRAP				
 }
 
 
@@ -748,6 +751,8 @@ void disp_in_serial(uint8_t* arr) {
         printf("%x", arr[i]);
     }
     printf("\n\r\n\r");
+    return;
+    CODE_TRAP	
 }
 
 void mymemcpy(void* dest, const void* src, u32 len) {
@@ -756,6 +761,8 @@ void mymemcpy(void* dest, const void* src, u32 len) {
     for (u32 i = 0; i < len; i++) {
         *destp++ = *srcp++;
     }
+    return;
+    CODE_TRAP	
 }
 
 uint8_t cmp(uint8_t* arr1, uint8_t* arr2, uint8_t len){
@@ -765,6 +772,7 @@ uint8_t cmp(uint8_t* arr1, uint8_t* arr2, uint8_t len){
             return 1;
         // todo: ²àÐÅµÀ¹¥»÷
     return 0;
+    CODE_TRAP
 }
 
 uint32_t len(uint8_t* arr){
@@ -790,6 +798,8 @@ void rand_delay() {
         total_delay = total_delay + nms;
     }
 	delay_ms(nms);
+    return;
+    CODE_TRAP	
 }
 
 void delay_ms(u32 time) {
